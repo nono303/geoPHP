@@ -79,13 +79,22 @@ class KML extends GeoAdapter
     $placemark_elements = $this->xmlobj->getElementsByTagName('placemark');
     if ($placemark_elements->length) {
       foreach ($placemark_elements as $placemark) {
+        $geometry = false;
+        $attributes = array();
         foreach ($placemark->childNodes as $child) {
           // Node names are all the same, except for MultiGeometry, which maps to GeometryCollection
           $node_name = $child->nodeName == 'multigeometry' ? 'geometrycollection' : $child->nodeName;
           if (array_key_exists($node_name, $geom_types)) {
             $function = 'parse'.$geom_types[$node_name];
-            $geometries[] = $this->$function($child);
+            $geometry = $this->$function($child);
+          } elseif ($child->nodeType == 1 && $child->childNodes->length == 1) {
+            $attributes[$child->nodeName] = $child->nodeValue;
           }
+        }
+        if ($geometry !== false)
+        {
+          $geometry->attributes = $attributes;
+          $geometries[] = $geometry;
         }
       }
     }
@@ -224,6 +233,16 @@ class KML extends GeoAdapter
   private function linestringToKML($geom, $type = FALSE) {
     if (!$type) {
       $type = $geom->getGeomType();
+
+      if ($type === 'LineString') {
+        $components = $geom->getComponents();
+        $firstPoint = array_shift($components);
+        $lastPoint = array_pop($components);
+
+        if ($firstPoint->equals($lastPoint)) {
+          $type = 'LinearRing';
+        }
+      }
     }
 
     $str = '<'.$this->nss . $type .'>';
