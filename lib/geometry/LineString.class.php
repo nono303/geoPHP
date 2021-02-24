@@ -101,7 +101,8 @@ class LineString extends Collection
       $lon1 = deg2rad($point->getX());
       $lon2 = deg2rad($next_point->getX());
       $dlon = $lon2 - $lon1;
-      if (geoPHP::bcmathInstalled()) {
+	  // Uncaught ValueError: bcmul(): Argument #2 ($num2) is not well-formed in D:\http\include_php\geoPHP\lib\geometry\LineString.class.php:113
+      if (false && geoPHP::bcmathInstalled()) {
         $length = bcadd(
           $length,
           bcmul(
