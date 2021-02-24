@@ -1,0 +1,105 @@
+From 21234d0406ab23c3a38f7a4a710a34daa738a23d Mon Sep 17 00:00:00 2001
+From: Geoffrey Roberts <geoffrey.roberts@sl.nsw.gov.au>
+Date: Fri, 2 Sep 2016 11:53:57 +1000
+Subject: [PATCH 1/3] Ensure associative arrays are properly normalised
+
+---
+ lib/adapters/WKB.class.php | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/lib/adapters/WKB.class.php b/lib/adapters/WKB.class.php
+index ebaff43..4cc465d 100644
+--- a/lib/adapters/WKB.class.php
++++ b/lib/adapters/WKB.class.php
+@@ -108,8 +108,9 @@ function getLinstring(&$mem) {
+     $components = array();
+     $i = 1;
+     $num_coords = count($line_coords);
++    $line_coord_values = array_values($line_coords);
+     while ($i <= $num_coords) {
+-      $components[] = new Point($line_coords[$i],$line_coords[$i+1]);
++      $components[] = new Point($line_coord_values[$i],$line_coord_values[$i+1]);
+       $i += 2;
+     }
+     return new LineString($components);
+
+From ea6f2dee7b4c9646fb13f63e3a5088eec2ddb02e Mon Sep 17 00:00:00 2001
+From: Geoffrey Roberts <geoffrey.roberts@sl.nsw.gov.au>
+Date: Fri, 2 Sep 2016 12:22:08 +1000
+Subject: [PATCH 2/3] Ensure malformed points are dropped
+
+---
+ lib/adapters/WKB.class.php | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/lib/adapters/WKB.class.php b/lib/adapters/WKB.class.php
+index 4cc465d..4f7b39c 100644
+--- a/lib/adapters/WKB.class.php
++++ b/lib/adapters/WKB.class.php
+@@ -103,13 +103,21 @@ function getLinstring(&$mem) {
+ 
+     // Read the nubmer of points x2 (each point is two coords) into decimal-floats
+     $line_coords = unpack('d*', fread($mem,$line_length[1]*$this->dimension*8));
++    ksort($line_coords);
+ 
+     // We have our coords, build up the linestring
+     $components = array();
+-    $i = 1;
++    $i = 0;
+     $num_coords = count($line_coords);
+     $line_coord_values = array_values($line_coords);
+     while ($i <= $num_coords) {
++      // Drop any malformed points.
++      if (!array_key_exists($i, $line_coord_values)) {
++        break;
++      }
++      if (!array_key_exists($i+1, $line_coord_values)) {
++        break;
++      }
+       $components[] = new Point($line_coord_values[$i],$line_coord_values[$i+1]);
+       $i += 2;
+     }
+
+From 9950c2074f7811dd03bd2a1f79b7cccb44beedaf Mon Sep 17 00:00:00 2001
+From: Geoffrey Roberts <geoffrey.roberts@sl.nsw.gov.au>
+Date: Fri, 2 Sep 2016 12:28:48 +1000
+Subject: [PATCH 3/3] Instead of looping, we chunk, filter and then map
+
+---
+ lib/adapters/WKB.class.php | 23 +++++++++--------------
+ 1 file changed, 9 insertions(+), 14 deletions(-)
+
+diff --git a/lib/adapters/WKB.class.php b/lib/adapters/WKB.class.php
+index 4f7b39c..3f70a66 100644
+--- a/lib/adapters/WKB.class.php
++++ b/lib/adapters/WKB.class.php
+@@ -107,20 +107,15 @@ function getLinstring(&$mem) {
+ 
+     // We have our coords, build up the linestring
+     $components = array();
+-    $i = 0;
+-    $num_coords = count($line_coords);
+-    $line_coord_values = array_values($line_coords);
+-    while ($i <= $num_coords) {
+-      // Drop any malformed points.
+-      if (!array_key_exists($i, $line_coord_values)) {
+-        break;
+-      }
+-      if (!array_key_exists($i+1, $line_coord_values)) {
+-        break;
+-      }
+-      $components[] = new Point($line_coord_values[$i],$line_coord_values[$i+1]);
+-      $i += 2;
+-    }
++
++    // Chunk array into 2-tuples, discarding any malformed elements.
++    $line_coords_filtered = array_filter(array_chunk($line_coords, 2), function($i) {
++      return count($i) == 2;
++    });
++    $components = array_map(function($i) {
++      return new Point($i[0], $i[1]);
++    }, $line_coords_filtered);
++
+     return new LineString($components);
+   }
+ 

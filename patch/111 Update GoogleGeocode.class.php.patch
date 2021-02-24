@@ -1,0 +1,78 @@
+From f9e55170741d53f60210e4ebbe07a74013898d19 Mon Sep 17 00:00:00 2001
+From: Swen Zanon <swen.zanon@geoglis.de>
+Date: Tue, 22 Sep 2015 16:16:11 +0200
+Subject: [PATCH] Update GoogleGeocode.class.php
+
+Code cleanup, braces added, ...
+---
+ lib/adapters/GoogleGeocode.class.php | 39 +++++++++++++---------------
+ 1 file changed, 18 insertions(+), 21 deletions(-)
+
+diff --git a/lib/adapters/GoogleGeocode.class.php b/lib/adapters/GoogleGeocode.class.php
+index 5178586..db37243 100644
+--- a/lib/adapters/GoogleGeocode.class.php
++++ b/lib/adapters/GoogleGeocode.class.php
+@@ -74,10 +74,13 @@ public function read($address, $return_type = 'point', $bounds = FALSE, $return_
+         }
+       }
+     }
++    
++    // result->status is not 'OK', so throw exception
++    if ($this->result->status) {
++      throw new \Exception('Error in Google Geocoder: '.$this->result->status);
++    }
+     else {
+-      if ($this->result->status) throw new Exception('Error in Google Geocoder: '.$this->result->status);
+-      else throw new Exception('Unknown error in Google Geocoder');
+-      return FALSE;
++      throw new \Exception('Unknown error in Google Geocoder');
+     }
+   }
+ 
+@@ -87,7 +90,7 @@ public function read($address, $return_type = 'point', $bounds = FALSE, $return_
+    * @param Geometry $geometry
+    * @param string $return_type Should be either 'string' or 'array'
+    *
+-   * @return string Does a reverse geocode of the geometry
++   * @return string|array string (default) otherwise array. Does a reverse geocode of the geometry.
+    */
+   public function write(Geometry $geometry, $return_type = 'string') {
+     $centroid = $geometry->getCentroid();
+@@ -99,26 +102,20 @@ public function write(Geometry $geometry, $return_type = 'string') {
+     $url .= '&sensor=false';
+     $this->result = json_decode(@file_get_contents($url));
+ 
+-    if ($this->result->status == 'OK') {
+-      if ($return_type == 'string') {
+-        return $this->result->results[0]->formatted_address;
+-      }
+-      if ($return_type == 'array') {
+-        return $this->result->results[0]->address_components;
+-      }
++    if ($this->result->status === 'OK') {
++        return $return_type === 'string' ? 
++          $this->result->results[0]->formatted_address : $this->result->results[0]->address_components;
+     }
+-    elseif ($this->result->status == 'ZERO_RESULTS') {
+-      if ($return_type == 'string') {
+-        return '';
+-      }
+-      if ($return_type == 'array') {
+-        return $this->result->results;
+-      }
++    elseif ($this->result->status === 'ZERO_RESULTS') {
++        return $return_type === 'string' ? '' : $this->result->results;
++    }
++
++    // result->status is not 'OK', so throw exception
++    if ($this->result->status) {
++      throw new \Exception('Error in Google Reverse Geocoder: '.$this->result->status);
+     }
+     else {
+-      if ($this->result->status) throw new Exception('Error in Google Reverse Geocoder: '.$this->result->status);
+-      else throw new Exception('Unknown error in Google Reverse Geocoder');
+-      return FALSE;
++      throw new \Exception('Unknown error in Google Reverse Geocoder');
+     }
+   }
+ 

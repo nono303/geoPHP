@@ -1,0 +1,53 @@
+From 584c025b2758d9c4a0e09380481566e3af8ad2d7 Mon Sep 17 00:00:00 2001
+From: John Russell <jrussell@ibpforum.org>
+Date: Mon, 11 Jan 2016 22:04:00 -0500
+Subject: [PATCH 1/2] The fopen() call used here uses the r+ mode which opens
+ the file for reading and writing. This however may cause issues if several
+ concurrent requests are served using the same file and lead to the corruption
+ of the files and in this case memory. Consider using the 'x+' mode for
+ exclusive file access to read and write Extended Well Known Binaries.
+
+---
+ lib/adapters/EWKB.class.php | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/adapters/EWKB.class.php b/lib/adapters/EWKB.class.php
+index 0d324d3..9235a14 100644
+--- a/lib/adapters/EWKB.class.php
++++ b/lib/adapters/EWKB.class.php
+@@ -18,7 +18,7 @@ public function read($wkb, $is_hex_string = FALSE) {
+     }
+     
+     // Open the wkb up in memory so we can examine the SRID
+-    $mem = fopen('php://memory', 'r+');
++    $mem = fopen('php://memory', 'x+'); //Fixed CWE-367
+     fwrite($mem, $wkb);
+     fseek($mem, 0);
+     $base_info = unpack("corder/ctype/cz/cm/cs", fread($mem, 5));
+
+From d83b3ff0c79cb0681a9572edd63dec226943059d Mon Sep 17 00:00:00 2001
+From: John Russell <jrussell@ibpforum.org>
+Date: Mon, 11 Jan 2016 22:06:23 -0500
+Subject: [PATCH 2/2] The fopen() call used here uses the r+ mode which opens
+ the file for reading and writing. This however may cause issues if several
+ concurrent requests are served using the same file and lead to the corruption
+ of the files and in this case memory. Consider using the 'x+' mode for
+ exclusive file access to read and write Well Known Binaries.
+
+---
+ lib/adapters/WKB.class.php | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/adapters/WKB.class.php b/lib/adapters/WKB.class.php
+index ebaff43..55ad0ab 100644
+--- a/lib/adapters/WKB.class.php
++++ b/lib/adapters/WKB.class.php
+@@ -37,7 +37,7 @@ public function read($wkb, $is_hex_string = FALSE) {
+       throw new Exception('Cannot read empty WKB geometry. Found ' . gettype($wkb));
+     }
+ 
+-    $mem = fopen('php://memory', 'r+');
++    $mem = fopen('php://memory', 'x+'); //Fixed CWE-367
+     fwrite($mem, $wkb);
+     fseek($mem, 0);
+ 

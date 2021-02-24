@@ -1,0 +1,190 @@
+From 4c901f85349a6063acf71e922171c5c70090ec6a Mon Sep 17 00:00:00 2001
+From: Paulo R <proberto.macedo@gmail.com>
+Date: Mon, 11 Nov 2013 12:14:13 -0200
+Subject: [PATCH 1/2] Adds support to metadata
+
+---
+ lib/geometry/Point.class.php | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index f49771e..25d33fa 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -17,7 +17,7 @@ class Point extends Geometry
+    * @param numeric $y The y coordinate (or latitude)
+    * @param numeric $z The z coordinate (or altitude) - optional
+    */
+-  public function __construct($x, $y, $z = NULL) {
++  public function __construct($x, $y, $z = NULL, $metadata = array()) {
+     // Basic validation on x and y
+     if (!is_numeric($x) || !is_numeric($y)) {
+       throw new Exception("Cannot construct Point. x and y should be numeric");
+@@ -43,6 +43,7 @@ public function __construct($x, $y, $z = NULL) {
+     if ($this->dimention == 3) {
+       $this->coords = array($x, $y, $z);
+     }
++    $this->metadata = $metadata;
+   }
+ 
+   /**
+@@ -152,4 +153,3 @@ public function interiorRingN($n)  { return NULL; }
+   public function pointOnSurface()   { return NULL; }
+   public function explode()          { return NULL; }
+ }
+-
+
+From 62e7cc1f2a6c6c313bdcc578a54bc40ea6f797ce Mon Sep 17 00:00:00 2001
+From: Paulo R <proberto.macedo@gmail.com>
+Date: Mon, 11 Nov 2013 12:14:32 -0200
+Subject: [PATCH 2/2] Adds waypoint metadata loading from GPX
+
+---
+ lib/adapters/GPX.class.php | 51 ++++++++++++++++++++++----------------
+ 1 file changed, 30 insertions(+), 21 deletions(-)
+
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index 9ca18b8..06250d2 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -37,23 +37,23 @@ public function write(Geometry $geometry, $namespace = FALSE) {
+     if ($geometry->isEmpty()) return NULL;
+     if ($namespace) {
+       $this->namespace = $namespace;
+-      $this->nss = $namespace.':';    
++      $this->nss = $namespace.':';
+     }
+     return '<'.$this->nss.'gpx creator="geoPHP" version="1.0">'.$this->geometryToGPX($geometry).'</'.$this->nss.'gpx>';
+   }
+-  
++
+   public function geomFromText($text) {
+     // Change to lower-case and strip all CDATA
+     $text = strtolower($text);
+     $text = preg_replace('/<!\[cdata\[(.*?)\]\]>/s','',$text);
+-    
++
+     // Load into DOMDocument
+     $xmlobj = new DOMDocument();
+     @$xmlobj->loadXML($text);
+     if ($xmlobj === false) {
+       throw new Exception("Invalid GPX: ". $text);
+     }
+-    
++
+     $this->xmlobj = $xmlobj;
+     try {
+       $geom = $this->geomFromXML();
+@@ -65,20 +65,28 @@ public function geomFromText($text) {
+ 
+     return $geom;
+   }
+-  
++
+   protected function geomFromXML() {
+     $geometries = array();
+     $geometries = array_merge($geometries, $this->parseWaypoints());
+     $geometries = array_merge($geometries, $this->parseTracks());
+     $geometries = array_merge($geometries, $this->parseRoutes());
+-    
++
+     if (empty($geometries)) {
+       throw new Exception("Invalid / Empty GPX");
+     }
+-    
+-    return geoPHP::geometryReduce($geometries); 
++
++    return geoPHP::geometryReduce($geometries);
+   }
+-  
++
++  protected function getElementMetadata($element) {
++      $metadata = array();
++      foreach ($element->childNodes as $child) {
++          $metadata[$child->nodeName] = $child->nodeValue;
++      }
++      return $metadata;
++  }
++
+   protected function childElements($xml, $nodename = '') {
+     $children = array();
+     foreach ($xml->childNodes as $child) {
+@@ -88,18 +96,19 @@ protected function childElements($xml, $nodename = '') {
+     }
+     return $children;
+   }
+-  
++
+   protected function parseWaypoints() {
+     $points = array();
+     $wpt_elements = $this->xmlobj->getElementsByTagName('wpt');
+     foreach ($wpt_elements as $wpt) {
+       $lat = $wpt->attributes->getNamedItem("lat")->nodeValue;
+       $lon = $wpt->attributes->getNamedItem("lon")->nodeValue;
+-      $points[] = new Point($lon, $lat);
++      $metadata = $this->getElementMetadata($wpt);
++      $points[] = new Point($lon, $lat, null, $metadata);
+     }
+     return $points;
+   }
+-  
++
+   protected function parseTracks() {
+     $lines = array();
+     $trk_elements = $this->xmlobj->getElementsByTagName('trk');
+@@ -116,7 +125,7 @@ protected function parseTracks() {
+     }
+     return $lines;
+   }
+-  
++
+   protected function parseRoutes() {
+     $lines = array();
+     $rte_elements = $this->xmlobj->getElementsByTagName('rte');
+@@ -131,7 +140,7 @@ protected function parseRoutes() {
+     }
+     return $lines;
+   }
+-  
++
+   protected function geometryToGPX($geom) {
+     $type = strtolower($geom->getGeomType());
+     switch ($type) {
+@@ -150,30 +159,30 @@ protected function geometryToGPX($geom) {
+         break;
+     }
+   }
+-  
++
+   private function pointToGPX($geom) {
+     return '<'.$this->nss.'wpt lat="'.$geom->getY().'" lon="'.$geom->getX().'" />';
+   }
+-  
++
+   private function linestringToGPX($geom) {
+     $gpx = '<'.$this->nss.'trk><'.$this->nss.'trkseg>';
+-    
++
+     foreach ($geom->getComponents() as $comp) {
+       $gpx .= '<'.$this->nss.'trkpt lat="'.$comp->getY().'" lon="'.$comp->getX().'" />';
+     }
+-    
++
+     $gpx .= '</'.$this->nss.'trkseg></'.$this->nss.'trk>';
+-    
++
+     return $gpx;
+   }
+-  
++
+   public function collectionToGPX($geom) {
+     $gpx = '';
+     $components = $geom->getComponents();
+     foreach ($geom->getComponents() as $comp) {
+       $gpx .= $this->geometryToGPX($comp);
+     }
+-    
++
+     return $gpx;
+   }
+ 

@@ -1,0 +1,510 @@
+From 35df1d2ca9c366b2fd30cbbb926a77a1c251389f Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Sun, 29 Nov 2015 12:24:03 -0500
+Subject: [PATCH 1/6] Use BCMath (when available) for arithmetic in Polygon
+ methods: area(), centroid(), and pointInPolygon().
+
+---
+ lib/geometry/Polygon.class.php | 69 ++++++++++++++++++++++++----------
+ 1 file changed, 50 insertions(+), 19 deletions(-)
+
+diff --git a/lib/geometry/Polygon.class.php b/lib/geometry/Polygon.class.php
+index f930b18..cefe89e 100644
+--- a/lib/geometry/Polygon.class.php
++++ b/lib/geometry/Polygon.class.php
+@@ -27,20 +27,32 @@ public function area($exterior_only = FALSE, $signed = FALSE) {
+     if((int)$c == '0') return NULL;
+     $a = '0';
+     foreach($pts as $k => $p){
+-      $j = ($k + 1) % $c;
+-      $a = $a + ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
++      if (extension_loaded('bcmath')) {
++        $j = bcmod(bcadd($k, '1'), $c);
++        $a = bcadd($a, bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX())));
++        if ($signed) $area = bcdiv($a, '2');
++        else $area = abs(bcdiv($a, '2'));
++      }
++      else {
++        $j = ($k + 1) % $c;
++        $a += ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
++        if ($signed) $area = ($a / 2);
++        else $area = abs(($a / 2));
++      }
+     }
+-    
+-    if ($signed) $area = ($a / 2);
+-    else $area = abs(($a / 2));
+-    
++
+     if ($exterior_only == TRUE) {
+       return $area;
+     }
+     foreach ($this->components as $delta => $component) {
+       if ($delta != 0) {
+         $inner_poly = new Polygon(array($component));
+-        $area -= $inner_poly->area();
++        if (extension_loaded('bcmath')) {
++          $area = bcsub($area, $inner_poly->area());
++        }
++        else {
++          $area -= $inner_poly->area();
++        }
+       }
+     }
+     return $area;
+@@ -67,15 +79,29 @@ public function centroid() {
+     }
+     
+     foreach($pts as $k => $p){
+-      $j = ($k + 1) % $c;
+-      $P = ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
+-      $cn['x'] = $cn['x'] + ($p->getX() + $pts[$j]->getX()) * $P;
+-      $cn['y'] = $cn['y'] + ($p->getY() + $pts[$j]->getY()) * $P;
++      if (extension_loaded('bcmath')) {
++        $j = bcmod(bcadd($k, '1'), $c);
++        $P = bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX()));
++        $cn['x'] = bcadd($cn['x'], bcmul(bcadd($p->getX(), $pts[$j]->getX()), $P));
++        $cn['y'] = bcadd($cn['y'], bcmul(bcadd($p->getY(), $pts[$j]->getY()), $P));
++      }
++      else {
++        $j = ($k + 1) % $c;
++        $P = ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
++        $cn['x'] = $cn['x'] + ($p->getX() + $pts[$j]->getX()) * $P;
++        $cn['y'] = $cn['y'] + ($p->getY() + $pts[$j]->getY()) * $P;
++      }
+     }
+-    
+-    $cn['x'] = $cn['x'] / ( 6 * $a);
+-    $cn['y'] = $cn['y'] / ( 6 * $a);
+-    
++
++    if (extension_loaded('bcmath')) {
++      $cn['x'] = bcdiv($cn['x'], bcmul('6', $a));
++      $cn['y'] = bcdiv($cn['y'], bcmul('6', $a));
++    }
++    else {
++      $cn['x'] = $cn['x'] / ( 6 * $a);
++      $cn['y'] = $cn['y'] / ( 6 * $a);
++    }
++
+     $centroid = new Point($cn['x'], $cn['y']);
+     return $centroid;
+   }
+@@ -176,10 +202,15 @@ public function pointInPolygon($point, $pointOnBoundary = true, $pointOnVertex =
+       && $point->y() <= max($vertex1->y(), $vertex2->y())
+       && $point->x() <= max($vertex1->x(), $vertex2->x())
+       && $vertex1->y() != $vertex2->y()) {
+-        $xinters = 
+-          ($point->y() - $vertex1->y()) * ($vertex2->x() - $vertex1->x())
+-          / ($vertex2->y() - $vertex1->y()) 
+-          + $vertex1->x();
++        if (extension_loaded('bcmath')) {
++          $xinters = bcadd(bcdiv(bcmul(bcsub($point->y(), $vertex1->y()), bcsub($vertex2->x(), $vertex1->x())), bcsub($vertex2->y(), $vertex1->y())), $vertex1->x());
++        }
++        else {
++          $xinters =
++            ($point->y() - $vertex1->y()) * ($vertex2->x() - $vertex1->x())
++            / ($vertex2->y() - $vertex1->y())
++            + $vertex1->x();
++        }
+         if ($xinters == $point->x()) {
+           // Check if point is on the polygon boundary (other than horizontal)
+           return $pointOnBoundary ? TRUE : FALSE;
+
+From 9824e5b807bbc9604360feec977367e910945e2c Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Sun, 29 Nov 2015 13:44:06 -0500
+Subject: [PATCH 2/6] Use BCMath (when available) for arithmetic in LineString
+ methods: length(), greatCircleLength(), haversineLength(),
+ lineSegmentIntersect().
+
+---
+ lib/geometry/LineString.class.php | 116 +++++++++++++++++++++++++-----
+ 1 file changed, 98 insertions(+), 18 deletions(-)
+
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index bef082c..63362de 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -69,7 +69,20 @@ public function length() {
+     foreach ($this->getPoints() as $delta => $point) {
+       $previous_point = $this->geometryN($delta);
+       if ($previous_point) {
+-        $length += sqrt(pow(($previous_point->getX() - $point->getX()), 2) + pow(($previous_point->getY()- $point->getY()), 2));
++        if (extension_loaded('bcmath')) {
++          $length = bcadd(
++            $length,
++            bcsqrt(
++              bcadd(
++                bcpow(bcsub($previous_point->getX(),$point->getX()), '2'),
++                bcpow(bcsub($previous_point->getY(), $point->getY()), '2')
++              )
++            )
++          );
++        }
++        else {
++          $length += sqrt(pow(($previous_point->getX() - $point->getX()), 2) + pow(($previous_point->getY()- $point->getY()), 2));
++        }
+       }
+     }
+     return $length;
+@@ -88,17 +101,45 @@ public function greatCircleLength($radius = 6378137) {
+       $lon1 = deg2rad($point->getX());
+       $lon2 = deg2rad($next_point->getX());
+       $dlon = $lon2 - $lon1;
+-      $length +=
+-        $radius *
++      if (extension_loaded('bcmath')) {
++        $length = bcadd(
++          $length,
++          bcmul(
++            $radius,
++            atan2(
++              bcsqrt(
++                bcadd(
++                  bcpow(bcmul(cos($lat2), sin($dlon)), '2'),
++                  bcpow(
++                    bcsub(
++                      bcmul(cos($lat1), sin($lat2)),
++                      bcmul(bcmul(sin($lat1), cos($lat2)), cos($dlon))
++                    ),
++                    '2'
++                  )
++                )
++              ),
++              bcadd(
++                bcmul(sin($lat1), sin($lat2)),
++                bcmul(bcmul(cos($lat1), cos($lat2)), cos($dlon))
++              )
++            )
++          )
++        );
++      }
++      else {
++        $length +=
++          $radius *
+           atan2(
+             sqrt(
+               pow(cos($lat2) * sin($dlon), 2) +
+-                pow(cos($lat1) * sin($lat2) - sin($lat1) * cos($lat2) * cos($dlon), 2)
++              pow(cos($lat1) * sin($lat2) - sin($lat1) * cos($lat2) * cos($dlon), 2)
+             )
+             ,
+             sin($lat1) * sin($lat2) +
+-              cos($lat1) * cos($lat2) * cos($dlon)
++            cos($lat1) * cos($lat2) * cos($dlon)
+           );
++      }
+     }
+     // Returns length in meters.
+     return $length;
+@@ -111,14 +152,36 @@ public function haversineLength() {
+       $point = $points[$i];
+       $next_point = $points[$i+1];
+       if (!is_object($next_point)) {continue;}
+-      $degree = rad2deg(
+-        acos(
+-          sin(deg2rad($point->getY())) * sin(deg2rad($next_point->getY())) +
++      if (extension_loaded('bcmath')) {
++        $degree = rad2deg(
++          acos(
++            bcadd(
++              bcmul(
++                sin(deg2rad($point->getY())),
++                sin(deg2rad($next_point->getY()))
++              ),
++              bcmul(
++                bcmul(
++                  cos(deg2rad($point->getY())),
++                  cos(deg2rad($next_point->getY()))
++                ),
++                cos(deg2rad(abs(bcsub($point->getX(), $next_point->getX()))))
++              )
++            )
++          )
++        );
++        $degrees = bcadd($degrees, $degree);
++      }
++      else {
++        $degree = rad2deg(
++          acos(
++            sin(deg2rad($point->getY())) * sin(deg2rad($next_point->getY())) +
+             cos(deg2rad($point->getY())) * cos(deg2rad($next_point->getY())) *
+-              cos(deg2rad(abs($point->getX() - $next_point->getX())))
+-        )
+-      );
+-      $degrees += $degree;
++            cos(deg2rad(abs($point->getX() - $next_point->getX())))
++          )
++        );
++        $degrees += $degree;
++      }
+     }
+     // Returns degrees
+     return $degrees;
+@@ -167,18 +230,35 @@ public function lineSegmentIntersect($segment) {
+     $p3_x = $segment->endPoint()->x();
+     $p3_y = $segment->endPoint()->y();
+ 
+-    $s1_x = $p1_x - $p0_x;     $s1_y = $p1_y - $p0_y;
+-    $s2_x = $p3_x - $p2_x;     $s2_y = $p3_y - $p2_y;
++    if (extension_loaded('bcmath')) {
++      $s1_x = bcsub($p1_x, $p0_x);
++      $s1_y = bcsub($p1_y, $p0_y);
++      $s2_x = bcsub($p3_x, $p2_x);
++      $s2_y = bcsub($p3_y, $p2_y);
+ 
+-    $fps = (-$s2_x * $s1_y) + ($s1_x * $s2_y);
+-    $fpt = (-$s2_x * $s1_y) + ($s1_x * $s2_y);
++      $fps = bcadd(bcmul(bcmul('-1', $s2_x), $s1_y), bcmul($s1_x, $s2_y));
++      $fpt = bcadd(bcmul(bcmul('-1', $s2_x), $s1_y), bcmul($s1_x, $s2_y));
++    }
++    else {
++      $s1_x = $p1_x - $p0_x;     $s1_y = $p1_y - $p0_y;
++      $s2_x = $p3_x - $p2_x;     $s2_y = $p3_y - $p2_y;
++
++      $fps = (-$s2_x * $s1_y) + ($s1_x * $s2_y);
++      $fpt = (-$s2_x * $s1_y) + ($s1_x * $s2_y);
++    }
+ 
+     if ($fps == 0 || $fpt == 0) {
+       return FALSE;
+     }
+ 
+-    $s = (-$s1_y * ($p0_x - $p2_x) + $s1_x * ($p0_y - $p2_y)) / $fps;
+-    $t = ( $s2_x * ($p0_y - $p2_y) - $s2_y * ($p0_x - $p2_x)) / $fpt;
++    if (extension_loaded('bcmath')) {
++      $s = bcdiv(bcadd(bcmul(bcmul('-1', $s1_y), bcsub($p0_x, $p2_x)), bcmul($s1_x, bcsub($p0_y, $p2_y))), $fps);
++      $t = bcdiv(bcsub(bcmul($s2_x, bcsub($p0_y, $p2_y)), bcmul($s2_y, bcsub($p0_x, $p2_x))), $fpt);
++    }
++    else {
++      $s = (-$s1_y * ($p0_x - $p2_x) + $s1_x * ($p0_y - $p2_y)) / $fps;
++      $t = ( $s2_x * ($p0_y - $p2_y) - $s2_y * ($p0_x - $p2_x)) / $fpt;
++    }
+ 
+     if ($s > 0 && $s < 1 && $t > 0 && $t < 1) {
+       // Collision detected
+
+From 49b098102c74540bfc25c8833c956bdc3b3dd4d9 Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Sun, 29 Nov 2015 13:50:00 -0500
+Subject: [PATCH 3/6] Add a helper method for determining if BCMath is
+ installed: geoPHP::bcmathInstalled()
+
+---
+ geoPHP.inc                        |  4 ++++
+ lib/geometry/LineString.class.php | 10 +++++-----
+ lib/geometry/Polygon.class.php    |  8 ++++----
+ 3 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index 7866304..12e7a33 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -117,6 +117,10 @@ class geoPHP
+     );
+   }
+ 
++  static function bcmathInstalled() {
++    return extension_loaded('bcmath');
++  }
++
+   static function geosInstalled($force = NULL) {
+     static $geos_installed = NULL;
+     if ($force !== NULL) $geos_installed = $force;
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index 63362de..362e1e2 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -69,7 +69,7 @@ public function length() {
+     foreach ($this->getPoints() as $delta => $point) {
+       $previous_point = $this->geometryN($delta);
+       if ($previous_point) {
+-        if (extension_loaded('bcmath')) {
++        if (geoPHP::bcmathInstalled()) {
+           $length = bcadd(
+             $length,
+             bcsqrt(
+@@ -101,7 +101,7 @@ public function greatCircleLength($radius = 6378137) {
+       $lon1 = deg2rad($point->getX());
+       $lon2 = deg2rad($next_point->getX());
+       $dlon = $lon2 - $lon1;
+-      if (extension_loaded('bcmath')) {
++      if (geoPHP::bcmathInstalled()) {
+         $length = bcadd(
+           $length,
+           bcmul(
+@@ -152,7 +152,7 @@ public function haversineLength() {
+       $point = $points[$i];
+       $next_point = $points[$i+1];
+       if (!is_object($next_point)) {continue;}
+-      if (extension_loaded('bcmath')) {
++      if (geoPHP::bcmathInstalled()) {
+         $degree = rad2deg(
+           acos(
+             bcadd(
+@@ -230,7 +230,7 @@ public function lineSegmentIntersect($segment) {
+     $p3_x = $segment->endPoint()->x();
+     $p3_y = $segment->endPoint()->y();
+ 
+-    if (extension_loaded('bcmath')) {
++    if (geoPHP::bcmathInstalled()) {
+       $s1_x = bcsub($p1_x, $p0_x);
+       $s1_y = bcsub($p1_y, $p0_y);
+       $s2_x = bcsub($p3_x, $p2_x);
+@@ -251,7 +251,7 @@ public function lineSegmentIntersect($segment) {
+       return FALSE;
+     }
+ 
+-    if (extension_loaded('bcmath')) {
++    if (geoPHP::bcmathInstalled()) {
+       $s = bcdiv(bcadd(bcmul(bcmul('-1', $s1_y), bcsub($p0_x, $p2_x)), bcmul($s1_x, bcsub($p0_y, $p2_y))), $fps);
+       $t = bcdiv(bcsub(bcmul($s2_x, bcsub($p0_y, $p2_y)), bcmul($s2_y, bcsub($p0_x, $p2_x))), $fpt);
+     }
+diff --git a/lib/geometry/Polygon.class.php b/lib/geometry/Polygon.class.php
+index cefe89e..104e446 100644
+--- a/lib/geometry/Polygon.class.php
++++ b/lib/geometry/Polygon.class.php
+@@ -27,7 +27,7 @@ public function area($exterior_only = FALSE, $signed = FALSE) {
+     if((int)$c == '0') return NULL;
+     $a = '0';
+     foreach($pts as $k => $p){
+-      if (extension_loaded('bcmath')) {
++      if (geoPHP::bcmathInstalled()) {
+         $j = bcmod(bcadd($k, '1'), $c);
+         $a = bcadd($a, bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX())));
+         if ($signed) $area = bcdiv($a, '2');
+@@ -47,7 +47,7 @@ public function area($exterior_only = FALSE, $signed = FALSE) {
+     foreach ($this->components as $delta => $component) {
+       if ($delta != 0) {
+         $inner_poly = new Polygon(array($component));
+-        if (extension_loaded('bcmath')) {
++        if (geoPHP::bcmathInstalled()) {
+           $area = bcsub($area, $inner_poly->area());
+         }
+         else {
+@@ -79,7 +79,7 @@ public function centroid() {
+     }
+     
+     foreach($pts as $k => $p){
+-      if (extension_loaded('bcmath')) {
++      if (geoPHP::bcmathInstalled()) {
+         $j = bcmod(bcadd($k, '1'), $c);
+         $P = bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX()));
+         $cn['x'] = bcadd($cn['x'], bcmul(bcadd($p->getX(), $pts[$j]->getX()), $P));
+@@ -93,7 +93,7 @@ public function centroid() {
+       }
+     }
+ 
+-    if (extension_loaded('bcmath')) {
++    if (geoPHP::bcmathInstalled()) {
+       $cn['x'] = bcdiv($cn['x'], bcmul('6', $a));
+       $cn['y'] = bcdiv($cn['y'], bcmul('6', $a));
+     }
+
+From 1298694d59528934749214326061494ea7f0562a Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Sun, 29 Nov 2015 15:10:32 -0500
+Subject: [PATCH 4/6] Set the BCMth scale to 24 to maintain precision in
+ arithmetic that uses a lot of decimal places (ie: latitude/longitude).
+
+---
+ geoPHP.inc | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index 12e7a33..b8db43a 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -118,7 +118,13 @@ class geoPHP
+   }
+ 
+   static function bcmathInstalled() {
+-    return extension_loaded('bcmath');
++    if (extension_loaded('bcmath')) {
++      // Set the BCMath scale to 24 to maintain precision in arithmetic that
++      // uses a lot of decimal places (ie: latitude/longitude).
++      bcscale(24);
++      return TRUE;
++    }
++    return FALSE;
+   }
+ 
+   static function geosInstalled($force = NULL) {
+
+From 05fa897a47cfd9ed36fc4ac856422eb3d10c0d8a Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Tue, 31 Dec 2019 10:16:25 -0500
+Subject: [PATCH 5/6] Fix Error: Call to a member function getY() on null
+
+---
+ lib/geometry/Polygon.class.php | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/lib/geometry/Polygon.class.php b/lib/geometry/Polygon.class.php
+index 104e446..c502ad7 100644
+--- a/lib/geometry/Polygon.class.php
++++ b/lib/geometry/Polygon.class.php
+@@ -27,14 +27,13 @@ public function area($exterior_only = FALSE, $signed = FALSE) {
+     if((int)$c == '0') return NULL;
+     $a = '0';
+     foreach($pts as $k => $p){
++      $j = ($k + 1) % $c;
+       if (geoPHP::bcmathInstalled()) {
+-        $j = bcmod(bcadd($k, '1'), $c);
+         $a = bcadd($a, bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX())));
+         if ($signed) $area = bcdiv($a, '2');
+         else $area = abs(bcdiv($a, '2'));
+       }
+       else {
+-        $j = ($k + 1) % $c;
+         $a += ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
+         if ($signed) $area = ($a / 2);
+         else $area = abs(($a / 2));
+@@ -79,14 +78,13 @@ public function centroid() {
+     }
+     
+     foreach($pts as $k => $p){
++      $j = ($k + 1) % $c;
+       if (geoPHP::bcmathInstalled()) {
+-        $j = bcmod(bcadd($k, '1'), $c);
+         $P = bcsub(bcmul($p->getX(), $pts[$j]->getY()), bcmul($p->getY(), $pts[$j]->getX()));
+         $cn['x'] = bcadd($cn['x'], bcmul(bcadd($p->getX(), $pts[$j]->getX()), $P));
+         $cn['y'] = bcadd($cn['y'], bcmul(bcadd($p->getY(), $pts[$j]->getY()), $P));
+       }
+       else {
+-        $j = ($k + 1) % $c;
+         $P = ($p->getX() * $pts[$j]->getY()) - ($p->getY() * $pts[$j]->getX());
+         $cn['x'] = $cn['x'] + ($p->getX() + $pts[$j]->getX()) * $P;
+         $cn['y'] = $cn['y'] + ($p->getY() + $pts[$j]->getY()) * $P;
+
+From 4ffd4a8014dbaad647f87c1c32a065c73fe73d02 Mon Sep 17 00:00:00 2001
+From: Michael Stenta <mike@mstenta.net>
+Date: Tue, 31 Dec 2019 10:33:36 -0500
+Subject: [PATCH 6/6] Revert "Set the BCMth scale to 24 to maintain precision
+ in arithmetic that uses a lot of decimal places (ie: latitude/longitude)."
+
+This reverts commit 1298694d59528934749214326061494ea7f0562a.
+---
+ geoPHP.inc | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index b8db43a..12e7a33 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -118,13 +118,7 @@ class geoPHP
+   }
+ 
+   static function bcmathInstalled() {
+-    if (extension_loaded('bcmath')) {
+-      // Set the BCMath scale to 24 to maintain precision in arithmetic that
+-      // uses a lot of decimal places (ie: latitude/longitude).
+-      bcscale(24);
+-      return TRUE;
+-    }
+-    return FALSE;
++    return extension_loaded('bcmath');
+   }
+ 
+   static function geosInstalled($force = NULL) {

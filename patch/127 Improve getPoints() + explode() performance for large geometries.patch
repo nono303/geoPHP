@@ -1,0 +1,54 @@
+From 3d16d797f067f92ebcf77da909cd3d31af28fb0b Mon Sep 17 00:00:00 2001
+From: Brady Law <brady@lyft.com>
+Date: Tue, 19 Apr 2016 19:00:33 -0700
+Subject: [PATCH] Perf improvements for 10k+ points
+
+---
+ README.md                         | 7 +++++++
+ lib/geometry/Collection.class.php | 8 ++++++--
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index 9ff8e4c..3023f05 100644
+--- a/README.md
++++ b/README.md
+@@ -139,6 +139,13 @@ foreach ($result as $item) {
+ ```
+ 
+ 
++Testing
++-------
++```
++cd tests/
++GEOPHP_RUN_TESTS=1 php tests/test.php
++```
++
+ Credit
+ -------------------------------------------------
+ 
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index dfacf37..2b80eca 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -231,7 +231,9 @@ public function numPoints() {
+   public function getPoints() {
+     $points = array();
+     foreach ($this->components as $component) {
+-      $points = array_merge($points, $component->getPoints());
++      foreach ($component->getPoints() as $point) {
++        $points[] = $point;
++      }
+     }
+     return $points;
+   }
+@@ -290,7 +292,9 @@ public function isSimple() {
+   public function explode() {
+     $parts = array();
+     foreach ($this->components as $component) {
+-      $parts = array_merge($parts, $component->explode());
++      foreach ($component->explode() as $subComponent) {
++        $parts[] = $subComponent;
++      }
+     }
+     return $parts;
+   }

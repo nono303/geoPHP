@@ -1,0 +1,4616 @@
+From cc6f74c5d7adbe669d2cb3c9aa820b7fe14051ce Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 10 Jul 2012 23:34:49 +0200
+Subject: [PATCH 01/33] Add Metadata support in Point class. Add a duration
+ method() in LineString.
+
+---
+ lib/adapters/GPX.class.php        | 50 ++++++++++++++++++-------------
+ lib/geometry/Collection.class.php |  8 +++++
+ lib/geometry/LineString.class.php | 39 ++++++++++++++++++++++++
+ lib/geometry/Point.class.php      | 19 +++++++++++-
+ 4 files changed, 94 insertions(+), 22 deletions(-)
+
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index 9ca18b8..710a9b1 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -37,23 +37,23 @@ public function write(Geometry $geometry, $namespace = FALSE) {
+     if ($geometry->isEmpty()) return NULL;
+     if ($namespace) {
+       $this->namespace = $namespace;
+-      $this->nss = $namespace.':';    
++      $this->nss = $namespace.':';
+     }
+     return '<'.$this->nss.'gpx creator="geoPHP" version="1.0">'.$this->geometryToGPX($geometry).'</'.$this->nss.'gpx>';
+   }
+-  
++
+   public function geomFromText($text) {
+     // Change to lower-case and strip all CDATA
+     $text = strtolower($text);
+     $text = preg_replace('/<!\[cdata\[(.*?)\]\]>/s','',$text);
+-    
++
+     // Load into DOMDocument
+     $xmlobj = new DOMDocument();
+     @$xmlobj->loadXML($text);
+     if ($xmlobj === false) {
+       throw new Exception("Invalid GPX: ". $text);
+     }
+-    
++
+     $this->xmlobj = $xmlobj;
+     try {
+       $geom = $this->geomFromXML();
+@@ -65,20 +65,20 @@ public function geomFromText($text) {
+ 
+     return $geom;
+   }
+-  
++
+   protected function geomFromXML() {
+     $geometries = array();
+     $geometries = array_merge($geometries, $this->parseWaypoints());
+     $geometries = array_merge($geometries, $this->parseTracks());
+     $geometries = array_merge($geometries, $this->parseRoutes());
+-    
++
+     if (empty($geometries)) {
+       throw new Exception("Invalid / Empty GPX");
+     }
+-    
+-    return geoPHP::geometryReduce($geometries); 
++
++    return geoPHP::geometryReduce($geometries);
+   }
+-  
++
+   protected function childElements($xml, $nodename = '') {
+     $children = array();
+     foreach ($xml->childNodes as $child) {
+@@ -88,7 +88,7 @@ protected function childElements($xml, $nodename = '') {
+     }
+     return $children;
+   }
+-  
++
+   protected function parseWaypoints() {
+     $points = array();
+     $wpt_elements = $this->xmlobj->getElementsByTagName('wpt');
+@@ -99,7 +99,7 @@ protected function parseWaypoints() {
+     }
+     return $points;
+   }
+-  
++
+   protected function parseTracks() {
+     $lines = array();
+     $trk_elements = $this->xmlobj->getElementsByTagName('trk');
+@@ -109,14 +109,22 @@ protected function parseTracks() {
+         foreach ($this->childElements($trkseg, 'trkpt') as $trkpt) {
+           $lat = $trkpt->attributes->getNamedItem("lat")->nodeValue;
+           $lon = $trkpt->attributes->getNamedItem("lon")->nodeValue;
+-          $components[] = new Point($lon, $lat);
++          $metadata = array();
++          foreach ($this->childElements($trkpt, 'time') as $time) {
++            $metadata['time'] = $time->nodeValue;
++          }
++          foreach ($this->childElements($trkpt, 'ele') as $ele) {
++            $metadata['ele'] = $ele->nodeValue;
++          }
++
++          $components[] = new Point($lon, $lat, NULL, $metadata);
+         }
+       }
+       if ($components) {$lines[] = new LineString($components);}
+     }
+     return $lines;
+   }
+-  
++
+   protected function parseRoutes() {
+     $lines = array();
+     $rte_elements = $this->xmlobj->getElementsByTagName('rte');
+@@ -131,7 +139,7 @@ protected function parseRoutes() {
+     }
+     return $lines;
+   }
+-  
++
+   protected function geometryToGPX($geom) {
+     $type = strtolower($geom->getGeomType());
+     switch ($type) {
+@@ -150,30 +158,30 @@ protected function geometryToGPX($geom) {
+         break;
+     }
+   }
+-  
++
+   private function pointToGPX($geom) {
+     return '<'.$this->nss.'wpt lat="'.$geom->getY().'" lon="'.$geom->getX().'" />';
+   }
+-  
++
+   private function linestringToGPX($geom) {
+     $gpx = '<'.$this->nss.'trk><'.$this->nss.'trkseg>';
+-    
++
+     foreach ($geom->getComponents() as $comp) {
+       $gpx .= '<'.$this->nss.'trkpt lat="'.$comp->getY().'" lon="'.$comp->getX().'" />';
+     }
+-    
++
+     $gpx .= '</'.$this->nss.'trkseg></'.$this->nss.'trk>';
+-    
++
+     return $gpx;
+   }
+-  
++
+   public function collectionToGPX($geom) {
+     $gpx = '';
+     $components = $geom->getComponents();
+     foreach ($geom->getComponents() as $comp) {
+       $gpx .= $this->geometryToGPX($comp);
+     }
+-    
++
+     return $gpx;
+   }
+ 
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index b709372..2e172dd 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -155,6 +155,14 @@ public function geometryN($n) {
+     }
+   }
+ 
++  public function duration($type = 'total') {
++    $duration = 0;
++    foreach ($this->components as $delta => $component) {
++      $duration += $component->duration($type);
++    }
++    return $duration;
++  }
++
+   public function length() {
+     $length = 0;
+     foreach ($this->components as $delta => $component) {
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index dd2d97a..d687cb1 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -133,6 +133,45 @@ public function isSimple() {
+     return TRUE;
+   }
+ 
++  public function duration($type = 'total') {
++
++    if ($type == 'total') {
++      $point_a = $this->startPoint();
++      $point_b = $this->endPoint();
++      if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
++        return strtotime($point_b->metadata['time']) - strtotime($point_a->metadata['time']);
++      }
++    }
++
++    if ($type == 'stop') {
++      $duration = 0;
++      foreach ($this->explode() as $LineString) {
++        $point_a = $LineString->startPoint();
++        $point_b = $LineString->endPoint();
++        if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
++          $time = strtotime($point_b->metadata['time']) - strtotime($point_a->metadata['time']);
++        } else {
++          $time = 0;
++        }
++
++        $length = $LineString->greatCircleLength();
++
++        if ($length == 0) {
++          $duration += $time;
++        }
++
++      }
++      return $duration;
++    }
++
++    if ($type == 'moving') {
++      return $this->duration('total') - $this->duration('stop');
++    }
++
++    return 0;
++
++  }
++
+   // Utility function to check if any line sigments intersect
+   // Derived from http://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect
+   public function lineSegmentIntersect($segment) {
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index e421090..3cacaa4 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -17,7 +17,7 @@ class Point extends Geometry
+    * @param numeric $y The y coordinate (or latitude)
+    * @param numeric $z The z coordinate (or altitude) - optional
+    */
+-  public function __construct($x, $y, $z = NULL) {
++  public function __construct($x, $y, $z = NULL, $metadata = array()) {
+     // Basic validation on x and y
+     if (!is_numeric($x) || !is_numeric($y)) {
+       throw new Exception("Cannot construct Point. x and y should be numeric");
+@@ -31,6 +31,8 @@ public function __construct($x, $y, $z = NULL) {
+       $this->dimention = 3;
+     }
+ 
++    $this->metadata = $metadata;
++
+     // Convert to floatval in case they are passed in as a string or integer etc.
+     $x = floatval($x);
+     $y = floatval($y);
+@@ -75,6 +77,17 @@ public function z() {
+     else return NULL;
+   }
+ 
++  public function metadata($key = NULL) {
++    if (!is_null($key)) {
++      if (isset($this->metadata[$key])) {
++        return $this->metadata[$key];
++      } else {
++        return NULL;
++      }
++    }
++    return $this->metadata;
++  }
++
+   // A point's centroid is itself
+   public function centroid() {
+     return $this;
+@@ -134,6 +147,10 @@ public function isSimple() {
+     return TRUE;
+   }
+ 
++  public function duration() {
++    return 0;
++  }
++
+   // Not valid for this geometry type
+   public function numGeometries()    { return NULL; }
+   public function geometryN($n)      { return NULL; }
+
+From 55173b406aa6c06202104296634de1136feb937f Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 20:36:24 +0200
+Subject: [PATCH 02/33] Testing new stuff with metadata...
+
+---
+ lib/geometry/Collection.class.php |   3 +
+ lib/geometry/Geometry.class.php   | 110 +++++++++++++++++-------------
+ lib/geometry/LineString.class.php |   7 +-
+ lib/geometry/Point.class.php      |  16 ++---
+ tests/test.php                    |   2 +-
+ 5 files changed, 74 insertions(+), 64 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index 2e172dd..ee02e91 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -24,6 +24,9 @@ public function __construct($components = array()) {
+     foreach ($components as $component) {
+       if ($component instanceof Geometry) {
+         $this->components[] = $component;
++        if (isset($component->_metadata)) {
++          $this->_metadata[] = $component->_metadata;
++        }
+       }
+       else {
+         throw new Exception("Cannot create a collection with non-geometries");
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 097fb85..5498bde 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -8,7 +8,7 @@ abstract class Geometry
+   private   $geos = NULL;
+   protected $srid = NULL;
+   protected $geom_type;
+-  
++
+   // Abtract: Standard
+   // -----------------
+   abstract public function area();
+@@ -32,35 +32,35 @@ abstract public function dimension();
+   abstract public function equals($geom);
+   abstract public function isEmpty();
+   abstract public function isSimple();
+-  
++
+   // Abtract: Non-Standard
+   // ---------------------
+   abstract public function getBBox();
+   abstract public function asArray();
+   abstract public function getPoints();
+   abstract public function explode();
+-  
+-  
++
++
+   // Public: Standard -- Common to all geometries
+   // --------------------------------------------
+   public function SRID() {
+     return $this->srid;
+   }
+-  
++
+   public function setSRID($srid) {
+     if ($this->geos()) {
+       $this->geos()->setSRID($srid);
+     }
+     $this->srid = $srid;
+   }
+-  
++
+   public function envelope() {
+     if ($this->isEmpty()) return new Polygon();
+-    
++
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->envelope());
+     }
+-    
++
+     $bbox = $this->getBBox();
+     $points = array (
+       new Point($bbox['maxx'],$bbox['miny']),
+@@ -69,22 +69,22 @@ public function envelope() {
+       new Point($bbox['minx'],$bbox['miny']),
+       new Point($bbox['maxx'],$bbox['miny']),
+     );
+-    
++
+     $outer_boundary = new LineString($points);
+     return new Polygon(array($outer_boundary));
+   }
+-  
++
+   public function geometryType() {
+     return $this->geom_type;
+   }
+-  
++
+   // Public: Non-Standard -- Common to all geometries
+   // ------------------------------------------------
+-  
++
+   // $this->out($format, $other_args);
+   public function out() {
+     $args = func_get_args();
+-    
++
+     $format = array_shift($args);
+     $type_map = geoPHP::getAdapterMap();
+     $processor_type = $type_map[$format];
+@@ -95,14 +95,14 @@ public function out() {
+ 
+     return $result;
+   }
+-  
+-  
++
++
+   // Public: Aliases
+   // ---------------
+   public function getCentroid() {
+     return $this->centroid();
+   }
+-  
++
+   public function getArea() {
+     return $this->area();
+   }
+@@ -110,7 +110,7 @@ public function getArea() {
+   public function getX() {
+     return $this->x();
+   }
+-  
++
+   public function getY() {
+     return $this->y();
+   }
+@@ -130,11 +130,11 @@ public function getSRID() {
+   public function asText() {
+     return $this->out('wkt');
+   }
+- 
++
+   public function asBinary() {
+     return $this->out('wkb');
+   }
+-  
++
+   // Public: GEOS Only Functions
+   // ---------------------------
+   public function geos() {
+@@ -156,19 +156,19 @@ public function geos() {
+   public function setGeos($geos) {
+     $this->geos = $geos;
+   }
+-  
++
+   public function pointOnSurface() {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->pointOnSurface());
+     }
+   }
+-  
++
+   public function equalsExact($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->equalsExact($geometry->geos());
+     }
+   }
+-  
++
+   public function relate($geometry, $pattern = NULL) {
+     if ($this->geos()) {
+       if ($pattern) {
+@@ -179,43 +179,43 @@ public function relate($geometry, $pattern = NULL) {
+       }
+     }
+   }
+-  
++
+   public function checkValidity() {
+     if ($this->geos()) {
+       return $this->geos()->checkValidity();
+     }
+   }
+-  
++
+   public function buffer($distance) {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->buffer($distance));
+     }
+   }
+-  
++
+   public function intersection($geometry) {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->intersection($geometry->geos()));
+     }
+   }
+-  
++
+   public function convexHull() {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->convexHull());
+     }
+   }
+-  
++
+   public function difference($geometry) {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->difference($geometry->geos()));
+     }
+   }
+-  
++
+   public function symDifference($geometry) {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->symDifference($geometry->geos()));
+     }
+   }
+-  
++
+   // Can pass in a geometry or an array of geometries
+   public function union($geometry) {
+     if ($this->geos()) {
+@@ -231,31 +231,31 @@ public function union($geometry) {
+       }
+     }
+   }
+-  
++
+   public function simplify($tolerance, $preserveTopology = FALSE) {
+     if ($this->geos()) {
+       return geoPHP::geosToGeometry($this->geos()->simplify($tolerance, $preserveTopology));
+     }
+   }
+-  
++
+   public function disjoint($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->disjoint($geometry->geos());
+     }
+   }
+-  
++
+   public function touches($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->touches($geometry->geos());
+     }
+   }
+-  
++
+   public function intersects($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->intersects($geometry->geos());
+     }
+   }
+-  
++
+   public function crosses($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->crosses($geometry->geos());
+@@ -267,25 +267,25 @@ public function within($geometry) {
+       return $this->geos()->within($geometry->geos());
+     }
+   }
+-  
++
+   public function contains($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->contains($geometry->geos());
+     }
+   }
+-  
++
+   public function overlaps($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->overlaps($geometry->geos());
+     }
+   }
+-  
++
+   public function covers($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->covers($geometry->geos());
+     }
+   }
+-  
++
+   public function coveredBy($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->coveredBy($geometry->geos());
+@@ -297,36 +297,36 @@ public function distance($geometry) {
+       return $this->geos()->distance($geometry->geos());
+     }
+   }
+-  
++
+   public function hausdorffDistance($geometry) {
+     if ($this->geos()) {
+       return $this->geos()->hausdorffDistance($geometry->geos());
+     }
+   }
+-  
+-  
++
++
+   // Public - Placeholders
+   // ---------------------
+   public function hasZ() {
+     // geoPHP does not support Z values at the moment
+-    return FALSE;  
++    return FALSE;
+   }
+-  
++
+   public function is3D() {
+     // geoPHP does not support 3D geometries at the moment
+-    return FALSE;  
++    return FALSE;
+   }
+-  
++
+   public function isMeasured() {
+     // geoPHP does not yet support M values
+     return FALSE;
+   }
+-  
++
+   public function coordinateDimension() {
+     // geoPHP only supports 2-dimentional space
+     return 2;
+   }
+-  
++
+   public function z() {
+     // geoPHP only supports 2-dimentional space
+     return NULL;
+@@ -336,5 +336,19 @@ public function m() {
+     // geoPHP only supports 2-dimentional space
+     return NULL;
+   }
+-  
++
++  public function hasKey($target, $key) {
++    if (isset($target->_metadata[__CLASS__][$key])) {
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function getKey($target, $key) {
++    return $target->_metadata[__CLASS__][$key];
++  }
++
++  public function setKey($target, $key, $value) {
++    $target->_metadata[__CLASS__][$key] = $value;
++  }
+ }
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index d687cb1..8f2c7fb 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -6,6 +6,7 @@
+ class LineString extends Collection
+ {
+   protected $geom_type = 'LineString';
++  public $_metadata = NULL;
+ 
+   /**
+    * Constructor
+@@ -133,7 +134,7 @@ public function isSimple() {
+     return TRUE;
+   }
+ 
+-  public function duration($type = 'total') {
++  public function duration($type = 'total', $threshold = 0.5) {
+ 
+     if ($type == 'total') {
+       $point_a = $this->startPoint();
+@@ -156,7 +157,7 @@ public function duration($type = 'total') {
+ 
+         $length = $LineString->greatCircleLength();
+ 
+-        if ($length == 0) {
++        if ($length >= 0 && $length <= $threshold) {
+           $duration += $time;
+         }
+ 
+@@ -165,7 +166,7 @@ public function duration($type = 'total') {
+     }
+ 
+     if ($type == 'moving') {
+-      return $this->duration('total') - $this->duration('stop');
++      return $this->duration('total', $threshold) - $this->duration('stop', $threshold);
+     }
+ 
+     return 0;
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index 3cacaa4..46a9162 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -7,6 +7,7 @@
+ class Point extends Geometry
+ {
+   public $coords = array(2);
++  public $_metadata = NULL;
+   protected $geom_type = 'Point';
+   protected $dimention = 2;
+ 
+@@ -31,7 +32,9 @@ public function __construct($x, $y, $z = NULL, $metadata = array()) {
+       $this->dimention = 3;
+     }
+ 
+-    $this->metadata = $metadata;
++    foreach ($metadata as $key => $value) {
++      $this->setKey($this, $key, $value);
++    }
+ 
+     // Convert to floatval in case they are passed in as a string or integer etc.
+     $x = floatval($x);
+@@ -77,17 +80,6 @@ public function z() {
+     else return NULL;
+   }
+ 
+-  public function metadata($key = NULL) {
+-    if (!is_null($key)) {
+-      if (isset($this->metadata[$key])) {
+-        return $this->metadata[$key];
+-      } else {
+-        return NULL;
+-      }
+-    }
+-    return $this->metadata;
+-  }
+-
+   // A point's centroid is itself
+   public function centroid() {
+     return $this;
+diff --git a/tests/test.php b/tests/test.php
+index 1ae9efa..00a61d9 100644
+--- a/tests/test.php
++++ b/tests/test.php
+@@ -1,7 +1,7 @@
+ <?php
+ 
+ // Uncomment to test
+-// run_test();
++run_test();
+ 
+ function run_test() {
+   header("Content-type: text");
+
+From 98c7dbea903e54e0912795ff82cb62f0dd829dbb Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 21:32:26 +0200
+Subject: [PATCH 03/33] Toward a better Metadata system.
+
+---
+ lib/geometry/Collection.class.php |  4 +---
+ lib/geometry/Geometry.class.php   | 20 ++++++++++++++------
+ lib/geometry/LineString.class.php | 10 +++++-----
+ lib/geometry/Point.class.php      |  4 ++--
+ 4 files changed, 22 insertions(+), 16 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index ee02e91..a73c3dc 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -24,9 +24,7 @@ public function __construct($components = array()) {
+     foreach ($components as $component) {
+       if ($component instanceof Geometry) {
+         $this->components[] = $component;
+-        if (isset($component->_metadata)) {
+-          $this->_metadata[] = $component->_metadata;
+-        }
++        $this->_metadata[] = $component->getMetadata();
+       }
+       else {
+         throw new Exception("Cannot create a collection with non-geometries");
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 5498bde..38cba7c 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -337,18 +337,26 @@ public function m() {
+     return NULL;
+   }
+ 
+-  public function hasKey($target, $key) {
+-    if (isset($target->_metadata[__CLASS__][$key])) {
++  public function hasMetadataKey($key) {
++    if (isset($this->_metadata[$key])) {
+       return TRUE;
+     }
+     return FALSE;
+   }
+ 
+-  public function getKey($target, $key) {
+-    return $target->_metadata[__CLASS__][$key];
++  public function getMetadataKey($key) {
++    if ($this->hasMetadataKey($key)) {
++      return $this->_metadata[$key];
++    }
++    return NULL;
+   }
+ 
+-  public function setKey($target, $key, $value) {
+-    $target->_metadata[__CLASS__][$key] = $value;
++  public function setMetadataKey($key, $value) {
++    $this->_metadata[$key] = $value;
+   }
++
++  public function getMetadata() {
++    return $this->_metadata;
++  }
++
+ }
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index 8f2c7fb..a441522 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -6,7 +6,7 @@
+ class LineString extends Collection
+ {
+   protected $geom_type = 'LineString';
+-  public $_metadata = NULL;
++  protected $_metadata = NULL;
+ 
+   /**
+    * Constructor
+@@ -139,8 +139,8 @@ public function duration($type = 'total', $threshold = 0.5) {
+     if ($type == 'total') {
+       $point_a = $this->startPoint();
+       $point_b = $this->endPoint();
+-      if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
+-        return strtotime($point_b->metadata['time']) - strtotime($point_a->metadata['time']);
++      if (!is_null($point_a->getMetadataKey('time')) && !is_null($point_b->getMetadataKey('time'))) {
++        return strtotime($point_b->getMetadataKey('time')) - strtotime($point_a->getMetadataKey('time'));
+       }
+     }
+ 
+@@ -149,8 +149,8 @@ public function duration($type = 'total', $threshold = 0.5) {
+       foreach ($this->explode() as $LineString) {
+         $point_a = $LineString->startPoint();
+         $point_b = $LineString->endPoint();
+-        if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
+-          $time = strtotime($point_b->metadata['time']) - strtotime($point_a->metadata['time']);
++        if (!is_null($point_a->getMetadataKey('time')) && !is_null($point_b->getMetadataKey('time'))) {
++          $time = strtotime($point_b->getMetadataKey('time')) - strtotime($point_a->getMetadataKey('time'));
+         } else {
+           $time = 0;
+         }
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index 46a9162..eef2edc 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -7,7 +7,7 @@
+ class Point extends Geometry
+ {
+   public $coords = array(2);
+-  public $_metadata = NULL;
++  protected $_metadata = NULL;
+   protected $geom_type = 'Point';
+   protected $dimention = 2;
+ 
+@@ -33,7 +33,7 @@ public function __construct($x, $y, $z = NULL, $metadata = array()) {
+     }
+ 
+     foreach ($metadata as $key => $value) {
+-      $this->setKey($this, $key, $value);
++      $this->setMetadataKey($key, $value);
+     }
+ 
+     // Convert to floatval in case they are passed in as a string or integer etc.
+
+From 95da9e86b2902a8181d961e4646e5429dc70d648 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 21:46:40 +0200
+Subject: [PATCH 04/33] Adding MetadataProvider Interface.
+
+---
+ geoPHP.inc                        | 5 +++++
+ lib/geometry/LineString.class.php | 2 +-
+ lib/geometry/Point.class.php      | 2 +-
+ 3 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index 7cb3e8a..c7b73c3 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -7,6 +7,9 @@
+  * file that was distributed with this source code.
+  */
+ 
++// Interfaces
++include_once("lib/geometry/MetadataProvider.class.php");
++
+ // Adapters
+ include_once("lib/adapters/GeoAdapter.class.php"); // Abtract class
+ include_once("lib/adapters/GeoJSON.class.php");
+@@ -31,6 +34,8 @@ include_once("lib/geometry/MultiLineString.class.php");
+ include_once("lib/geometry/MultiPolygon.class.php");
+ include_once("lib/geometry/GeometryCollection.class.php");
+ 
++
++
+ class geoPHP
+ {
+ 
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index a441522..cd57f40 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -3,7 +3,7 @@
+  * LineString. A collection of Points representing a line.
+  * A line can have more than one segment.
+  */
+-class LineString extends Collection
++class LineString extends Collection implements MetadataProvider
+ {
+   protected $geom_type = 'LineString';
+   protected $_metadata = NULL;
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index eef2edc..78ed3ae 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -4,7 +4,7 @@
+  * Point: The most basic geometry type. All other geometries
+  * are built out of Points.
+  */
+-class Point extends Geometry
++class Point extends Geometry implements MetadataProvider
+ {
+   public $coords = array(2);
+   protected $_metadata = NULL;
+
+From 9d0a9b4035364886d685e32edd84dfc30b0ee94b Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 21:47:07 +0200
+Subject: [PATCH 05/33] Adding MetadataProvider Interface.
+
+---
+ lib/geometry/MetadataProvider.class.php | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+ create mode 100644 lib/geometry/MetadataProvider.class.php
+
+diff --git a/lib/geometry/MetadataProvider.class.php b/lib/geometry/MetadataProvider.class.php
+new file mode 100644
+index 0000000..d7a36b4
+--- /dev/null
++++ b/lib/geometry/MetadataProvider.class.php
+@@ -0,0 +1,9 @@
++<?php
++
++interface MetadataProvider
++{
++    public function hasMetadataKey($key);
++    public function setMetadataKey($key, $value);
++    public function getMetadataKey($key);
++    public function getMetadata();
++}
+
+From d8a4e2b7f583af9196970fd2f81401e1874b7e10 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 23:30:12 +0200
+Subject: [PATCH 06/33] Refactoring with the help of Pierre Buyle
+ (@mongolito404).
+
+---
+ geoPHP.inc                                    |  3 ++
+ lib/adapters/GPX.class.php                    | 19 ++++++---
+ lib/geometry/Collection.class.php             |  1 -
+ .../ElevationMetadataProvider.class.php       | 24 +++++++++++
+ lib/geometry/Geometry.class.php               | 41 ++++++++++---------
+ lib/geometry/LineString.class.php             | 12 +++---
+ lib/geometry/MetadataProvider.class.php       |  8 ++--
+ lib/geometry/MultiLineString.class.php        |  1 -
+ lib/geometry/Point.class.php                  |  9 +---
+ lib/geometry/TimeMetadataProvider.class.php   | 24 +++++++++++
+ 10 files changed, 98 insertions(+), 44 deletions(-)
+ create mode 100644 lib/geometry/ElevationMetadataProvider.class.php
+ create mode 100644 lib/geometry/TimeMetadataProvider.class.php
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index c7b73c3..b1ec15b 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -10,6 +10,9 @@
+ // Interfaces
+ include_once("lib/geometry/MetadataProvider.class.php");
+ 
++include_once("lib/geometry/TimeMetadataProvider.class.php");
++include_once("lib/geometry/ElevationMetadataProvider.class.php");
++
+ // Adapters
+ include_once("lib/adapters/GeoAdapter.class.php"); // Abtract class
+ include_once("lib/adapters/GeoJSON.class.php");
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index 710a9b1..aad3457 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -103,24 +103,33 @@ protected function parseWaypoints() {
+   protected function parseTracks() {
+     $lines = array();
+     $trk_elements = $this->xmlobj->getElementsByTagName('trk');
++    $tmd_provider = new TimeMetadataProvider();
++    $ele_provider = new ElevationMetadataProvider();
+     foreach ($trk_elements as $trk) {
+       $components = array();
+       foreach ($this->childElements($trk, 'trkseg') as $trkseg) {
+         foreach ($this->childElements($trkseg, 'trkpt') as $trkpt) {
+           $lat = $trkpt->attributes->getNamedItem("lat")->nodeValue;
+           $lon = $trkpt->attributes->getNamedItem("lon")->nodeValue;
+-          $metadata = array();
++          $component = new Point($lon, $lat, NULL);
++          $component->registerMetadataProvider($tmd_provider);
++          $component->registerMetadataProvider($ele_provider);
+           foreach ($this->childElements($trkpt, 'time') as $time) {
+-            $metadata['time'] = $time->nodeValue;
++            $component->metadata('time', $time->nodeValue);
+           }
+           foreach ($this->childElements($trkpt, 'ele') as $ele) {
+-            $metadata['ele'] = $ele->nodeValue;
++            $component->metadata('ele', $ele->nodeValue);
+           }
+ 
+-          $components[] = new Point($lon, $lat, NULL, $metadata);
++          $components[] = $component;
+         }
+       }
+-      if ($components) {$lines[] = new LineString($components);}
++
++      if ($components) {
++        $line = new LineString($components);
++        $line->registerMetadataProvider($tmd_provider);
++        $lines[] = $line;
++      }
+     }
+     return $lines;
+   }
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index a73c3dc..2e172dd 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -24,7 +24,6 @@ public function __construct($components = array()) {
+     foreach ($components as $component) {
+       if ($component instanceof Geometry) {
+         $this->components[] = $component;
+-        $this->_metadata[] = $component->getMetadata();
+       }
+       else {
+         throw new Exception("Cannot create a collection with non-geometries");
+diff --git a/lib/geometry/ElevationMetadataProvider.class.php b/lib/geometry/ElevationMetadataProvider.class.php
+new file mode 100644
+index 0000000..e765b04
+--- /dev/null
++++ b/lib/geometry/ElevationMetadataProvider.class.php
+@@ -0,0 +1,24 @@
++<?php
++
++class ElevationMetadataProvider implements MetadataProvider {
++
++  public function has($target, $key) {
++    return !empty($target->metadata[__CLASS__][$key]) || ($key === 'ele' && ($target instanceof Collection));
++  }
++
++  public function get($target, $key) {
++    if ($this->has($target, $key)) {
++      return $target->metadata[__CLASS__][$key];
++    }
++  }
++
++  public function set($target, $key, $value) {
++    $target->metadata[__CLASS__][$key] = $value;
++    return TRUE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 38cba7c..5603407 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -337,26 +337,27 @@ public function m() {
+     return NULL;
+   }
+ 
+-  public function hasMetadataKey($key) {
+-    if (isset($this->_metadata[$key])) {
+-      return TRUE;
+-    }
+-    return FALSE;
+-  }
+-
+-  public function getMetadataKey($key) {
+-    if ($this->hasMetadataKey($key)) {
+-      return $this->_metadata[$key];
++  public function registerMetadataProvider(MetadataProvider $provider) {
++    $this->metadata_providers[$provider->id()] = $provider;
++  }
++
++  public function metadata($key) {
++    if (func_num_args() == 1) {
++      // Get value for $key.
++      foreach ($this->metadata_providers as $metadata_provider) {
++       if ($metadata_provider->has($this, $key)) {
++         return $metadata_provider->get($this, $key);
++       }
++     }
++    } else {
++      // Set value for $key.
++      $value = func_get_arg(1);
++      foreach ($this->metadata_providers as $metadata_provider) {
++        if ($metadata_provider->set($this, $key, $value)) {
++          return TRUE;
++        }
++        return FALSE;
++      }
+     }
+-    return NULL;
+-  }
+-
+-  public function setMetadataKey($key, $value) {
+-    $this->_metadata[$key] = $value;
+   }
+-
+-  public function getMetadata() {
+-    return $this->_metadata;
+-  }
+-
+ }
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index cd57f40..f625aaf 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -3,10 +3,9 @@
+  * LineString. A collection of Points representing a line.
+  * A line can have more than one segment.
+  */
+-class LineString extends Collection implements MetadataProvider
++class LineString extends Collection
+ {
+   protected $geom_type = 'LineString';
+-  protected $_metadata = NULL;
+ 
+   /**
+    * Constructor
+@@ -139,8 +138,8 @@ public function duration($type = 'total', $threshold = 0.5) {
+     if ($type == 'total') {
+       $point_a = $this->startPoint();
+       $point_b = $this->endPoint();
+-      if (!is_null($point_a->getMetadataKey('time')) && !is_null($point_b->getMetadataKey('time'))) {
+-        return strtotime($point_b->getMetadataKey('time')) - strtotime($point_a->getMetadataKey('time'));
++      if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
++        return strtotime($point_b->metadata('time')) - strtotime($point_a->metadata('time'));
+       }
+     }
+ 
+@@ -149,8 +148,8 @@ public function duration($type = 'total', $threshold = 0.5) {
+       foreach ($this->explode() as $LineString) {
+         $point_a = $LineString->startPoint();
+         $point_b = $LineString->endPoint();
+-        if (!is_null($point_a->getMetadataKey('time')) && !is_null($point_b->getMetadataKey('time'))) {
+-          $time = strtotime($point_b->getMetadataKey('time')) - strtotime($point_a->getMetadataKey('time'));
++        if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
++          $time = strtotime($point_b->metadata('time')) - strtotime($point_a->metadata('time'));
+         } else {
+           $time = 0;
+         }
+@@ -204,5 +203,6 @@ public function lineSegmentIntersect($segment) {
+     }
+     return FALSE;
+   }
++
+ }
+ 
+diff --git a/lib/geometry/MetadataProvider.class.php b/lib/geometry/MetadataProvider.class.php
+index d7a36b4..3bb1de4 100644
+--- a/lib/geometry/MetadataProvider.class.php
++++ b/lib/geometry/MetadataProvider.class.php
+@@ -2,8 +2,8 @@
+ 
+ interface MetadataProvider
+ {
+-    public function hasMetadataKey($key);
+-    public function setMetadataKey($key, $value);
+-    public function getMetadataKey($key);
+-    public function getMetadata();
++    public function has($target, $key);
++    public function set($target, $key, $value);
++    public function get($target, $key);
++    public function id();
+ }
+diff --git a/lib/geometry/MultiLineString.class.php b/lib/geometry/MultiLineString.class.php
+index 3ab085a..33972a3 100644
+--- a/lib/geometry/MultiLineString.class.php
++++ b/lib/geometry/MultiLineString.class.php
+@@ -15,6 +15,5 @@ public function isClosed() {
+     }
+     return TRUE;
+   }
+-
+ }
+ 
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index 78ed3ae..533e9b3 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -4,10 +4,9 @@
+  * Point: The most basic geometry type. All other geometries
+  * are built out of Points.
+  */
+-class Point extends Geometry implements MetadataProvider
++class Point extends Geometry
+ {
+   public $coords = array(2);
+-  protected $_metadata = NULL;
+   protected $geom_type = 'Point';
+   protected $dimention = 2;
+ 
+@@ -18,7 +17,7 @@ class Point extends Geometry implements MetadataProvider
+    * @param numeric $y The y coordinate (or latitude)
+    * @param numeric $z The z coordinate (or altitude) - optional
+    */
+-  public function __construct($x, $y, $z = NULL, $metadata = array()) {
++  public function __construct($x, $y, $z = NULL) {
+     // Basic validation on x and y
+     if (!is_numeric($x) || !is_numeric($y)) {
+       throw new Exception("Cannot construct Point. x and y should be numeric");
+@@ -32,10 +31,6 @@ public function __construct($x, $y, $z = NULL, $metadata = array()) {
+       $this->dimention = 3;
+     }
+ 
+-    foreach ($metadata as $key => $value) {
+-      $this->setMetadataKey($key, $value);
+-    }
+-
+     // Convert to floatval in case they are passed in as a string or integer etc.
+     $x = floatval($x);
+     $y = floatval($y);
+diff --git a/lib/geometry/TimeMetadataProvider.class.php b/lib/geometry/TimeMetadataProvider.class.php
+new file mode 100644
+index 0000000..c1e3608
+--- /dev/null
++++ b/lib/geometry/TimeMetadataProvider.class.php
+@@ -0,0 +1,24 @@
++<?php
++
++class TimeMetadataProvider implements MetadataProvider {
++
++  public function has($target, $key) {
++    return !empty($target->metadata[__CLASS__][$key]) || ($key === 'time' && ($target instanceof Collection));
++  }
++
++  public function get($target, $key) {
++    if ($this->has($target, $key)) {
++      return $target->metadata[__CLASS__][$key];
++    }
++  }
++
++  public function set($target, $key, $value) {
++    $target->metadata[__CLASS__][$key] = $value;
++    return TRUE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+
+From 484fbf969b330b162283ce0fc39ce108d19cc2af Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 16 Jul 2012 23:56:01 +0200
+Subject: [PATCH 07/33] Fix some bugs in Geometry class.
+
+---
+ lib/adapters/GPX.class.php                       | 1 +
+ lib/geometry/Collection.class.php                | 9 +++++++++
+ lib/geometry/ElevationMetadataProvider.class.php | 7 +++++--
+ lib/geometry/Geometry.class.php                  | 2 +-
+ lib/geometry/TimeMetadataProvider.class.php      | 7 +++++--
+ 5 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index aad3457..f0aff6e 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -128,6 +128,7 @@ protected function parseTracks() {
+       if ($components) {
+         $line = new LineString($components);
+         $line->registerMetadataProvider($tmd_provider);
++        $line->registerMetadataProvider($ele_provider);
+         $lines[] = $line;
+       }
+     }
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index 2e172dd..037d206 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -290,5 +290,14 @@ public function exteriorRing()     { return NULL; }
+   public function numInteriorRings() { return NULL; }
+   public function interiorRingN($n)  { return NULL; }
+   public function pointOnSurface()   { return NULL; }
++
++  public function metadata($key) {
++    $metadatas = array();
++    foreach ($this->components as $component) {
++      $metadatas[] = $component->metadata($key);
++    }
++    return $metadatas;
++  }
++
+ }
+ 
+diff --git a/lib/geometry/ElevationMetadataProvider.class.php b/lib/geometry/ElevationMetadataProvider.class.php
+index e765b04..811f534 100644
+--- a/lib/geometry/ElevationMetadataProvider.class.php
++++ b/lib/geometry/ElevationMetadataProvider.class.php
+@@ -13,8 +13,11 @@ public function get($target, $key) {
+   }
+ 
+   public function set($target, $key, $value) {
+-    $target->metadata[__CLASS__][$key] = $value;
+-    return TRUE;
++    if ($key === 'ele') {
++      $target->metadata[__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
+   }
+ 
+   public function id() {
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 5603407..8b9ee67 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -356,8 +356,8 @@ public function metadata($key) {
+         if ($metadata_provider->set($this, $key, $value)) {
+           return TRUE;
+         }
+-        return FALSE;
+       }
++      return FALSE;
+     }
+   }
+ }
+diff --git a/lib/geometry/TimeMetadataProvider.class.php b/lib/geometry/TimeMetadataProvider.class.php
+index c1e3608..bb29651 100644
+--- a/lib/geometry/TimeMetadataProvider.class.php
++++ b/lib/geometry/TimeMetadataProvider.class.php
+@@ -13,8 +13,11 @@ public function get($target, $key) {
+   }
+ 
+   public function set($target, $key, $value) {
+-    $target->metadata[__CLASS__][$key] = $value;
+-    return TRUE;
++    if ($key === 'time') {
++      $target->metadata[__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
+   }
+ 
+   public function id() {
+
+From 974e382a66b1fe0cc929d9f1d735c2a0e7ee9171 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 00:23:37 +0200
+Subject: [PATCH 08/33] Trying to move the duration function into the
+ TimeMetadataProvider...
+
+---
+ lib/geometry/Collection.class.php | 6 +-----
+ lib/geometry/Geometry.class.php   | 8 ++++----
+ lib/geometry/LineString.class.php | 1 -
+ 3 files changed, 5 insertions(+), 10 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index 037d206..c23080b 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -292,11 +292,7 @@ public function interiorRingN($n)  { return NULL; }
+   public function pointOnSurface()   { return NULL; }
+ 
+   public function metadata($key) {
+-    $metadatas = array();
+-    foreach ($this->components as $component) {
+-      $metadatas[] = $component->metadata($key);
+-    }
+-    return $metadatas;
++    return $this->components->metadata($key);
+   }
+ 
+ }
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 8b9ee67..c097037 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -345,10 +345,10 @@ public function metadata($key) {
+     if (func_num_args() == 1) {
+       // Get value for $key.
+       foreach ($this->metadata_providers as $metadata_provider) {
+-       if ($metadata_provider->has($this, $key)) {
+-         return $metadata_provider->get($this, $key);
+-       }
+-     }
++        if ($metadata_provider->has($this, $key)) {
++          return $metadata_provider->get($this, $key);
++        }
++      }
+     } else {
+       // Set value for $key.
+       $value = func_get_arg(1);
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index f625aaf..35eaae2 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -203,6 +203,5 @@ public function lineSegmentIntersect($segment) {
+     }
+     return FALSE;
+   }
+-
+ }
+ 
+
+From fc212b974c06ef20e3c604fe3769cccf422ec13c Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 12:23:02 +0200
+Subject: [PATCH 09/33] Update and cleaning.
+
+---
+ geoPHP.inc                                    | 13 +++---
+ lib/adapters/GPX.class.php                    | 14 ++++---
+ lib/geometry/Collection.class.php             |  4 --
+ .../ElevationMetadataProvider.class.php       | 27 ------------
+ lib/geometry/Geometry.class.php               | 32 +++++++--------
+ lib/geometry/LineString.class.php             | 41 +------------------
+ lib/geometry/TimeMetadataProvider.class.php   | 27 ------------
+ .../ElevationMetadataProvider.class.php       | 27 ++++++++++++
+ .../MetadataProvider.class.php                |  2 +-
+ lib/metadata/TimeMetadataProvider.class.php   | 32 +++++++++++++++
+ 10 files changed, 93 insertions(+), 126 deletions(-)
+ delete mode 100644 lib/geometry/ElevationMetadataProvider.class.php
+ delete mode 100644 lib/geometry/TimeMetadataProvider.class.php
+ create mode 100644 lib/metadata/ElevationMetadataProvider.class.php
+ rename lib/{geometry => metadata}/MetadataProvider.class.php (75%)
+ create mode 100644 lib/metadata/TimeMetadataProvider.class.php
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index b1ec15b..c1a2731 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -7,11 +7,11 @@
+  * file that was distributed with this source code.
+  */
+ 
+-// Interfaces
+-include_once("lib/geometry/MetadataProvider.class.php");
+-
+-include_once("lib/geometry/TimeMetadataProvider.class.php");
+-include_once("lib/geometry/ElevationMetadataProvider.class.php");
++// Metadata
++include_once("lib/metadata/MetadataProvider.class.php");
++include_once("lib/metadata/TimeMetadataProvider.class.php");
++include_once("lib/metadata/ElevationMetadataProvider.class.php");
++include_once("lib/metadata/DurationMetadataProvider.class.php");
+ 
+ // Adapters
+ include_once("lib/adapters/GeoAdapter.class.php"); // Abtract class
+@@ -195,7 +195,8 @@ class geoPHP
+       }
+       else {
+         $class = 'Multi'.$geom_types[0];
+-        return new $class($geometries);
++        $class = new $class($geometries);
++        return $class;
+       }
+     }
+     else {
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index f0aff6e..3436794 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -103,8 +103,8 @@ protected function parseWaypoints() {
+   protected function parseTracks() {
+     $lines = array();
+     $trk_elements = $this->xmlobj->getElementsByTagName('trk');
+-    $tmd_provider = new TimeMetadataProvider();
+     $ele_provider = new ElevationMetadataProvider();
++    $tmd_provider = new TimeMetadataProvider();
+     foreach ($trk_elements as $trk) {
+       $components = array();
+       foreach ($this->childElements($trk, 'trkseg') as $trkseg) {
+@@ -112,13 +112,13 @@ protected function parseTracks() {
+           $lat = $trkpt->attributes->getNamedItem("lat")->nodeValue;
+           $lon = $trkpt->attributes->getNamedItem("lon")->nodeValue;
+           $component = new Point($lon, $lat, NULL);
+-          $component->registerMetadataProvider($tmd_provider);
+-          $component->registerMetadataProvider($ele_provider);
+           foreach ($this->childElements($trkpt, 'time') as $time) {
+-            $component->metadata('time', $time->nodeValue);
++            $component->registerMetadataProvider($tmd_provider);
++            $component->setMetadata('time', $time->nodeValue);
+           }
+           foreach ($this->childElements($trkpt, 'ele') as $ele) {
+-            $component->metadata('ele', $ele->nodeValue);
++            $component->registerMetadataProvider($ele_provider);
++            $component->setMetadata('ele', $ele->nodeValue);
+           }
+ 
+           $components[] = $component;
+@@ -126,8 +126,10 @@ protected function parseTracks() {
+       }
+ 
+       if ($components) {
++        $duration_provider = new DurationMetadataProvider();
++
+         $line = new LineString($components);
+-        $line->registerMetadataProvider($tmd_provider);
++        $line->registerMetadataProvider($duration_provider);
+         $line->registerMetadataProvider($ele_provider);
+         $lines[] = $line;
+       }
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index c23080b..db0f62f 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -291,9 +291,5 @@ public function numInteriorRings() { return NULL; }
+   public function interiorRingN($n)  { return NULL; }
+   public function pointOnSurface()   { return NULL; }
+ 
+-  public function metadata($key) {
+-    return $this->components->metadata($key);
+-  }
+-
+ }
+ 
+diff --git a/lib/geometry/ElevationMetadataProvider.class.php b/lib/geometry/ElevationMetadataProvider.class.php
+deleted file mode 100644
+index 811f534..0000000
+--- a/lib/geometry/ElevationMetadataProvider.class.php
++++ /dev/null
+@@ -1,27 +0,0 @@
+-<?php
+-
+-class ElevationMetadataProvider implements MetadataProvider {
+-
+-  public function has($target, $key) {
+-    return !empty($target->metadata[__CLASS__][$key]) || ($key === 'ele' && ($target instanceof Collection));
+-  }
+-
+-  public function get($target, $key) {
+-    if ($this->has($target, $key)) {
+-      return $target->metadata[__CLASS__][$key];
+-    }
+-  }
+-
+-  public function set($target, $key, $value) {
+-    if ($key === 'ele') {
+-      $target->metadata[__CLASS__][$key] = $value;
+-      return TRUE;
+-    }
+-    return FALSE;
+-  }
+-
+-  public function id() {
+-    return __CLASS__;
+-  }
+-
+-}
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index c097037..1f84b4a 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -338,26 +338,26 @@ public function m() {
+   }
+ 
+   public function registerMetadataProvider(MetadataProvider $provider) {
+-    $this->metadata_providers[$provider->id()] = $provider;
++    $this->metadata['providers'][$provider->id()] = $provider;
+   }
+ 
+-  public function metadata($key) {
+-    if (func_num_args() == 1) {
+-      // Get value for $key.
+-      foreach ($this->metadata_providers as $metadata_provider) {
+-        if ($metadata_provider->has($this, $key)) {
+-          return $metadata_provider->get($this, $key);
+-        }
++  public function setMetadata($key, $value) {
++    // Set value for $key.
++    $value = func_get_arg(1);
++    foreach ($this->metadata['providers'] as $metadata_provider) {
++      if ($metadata_provider->set($this, $key, $value)) {
++        return TRUE;
+       }
+-    } else {
+-      // Set value for $key.
+-      $value = func_get_arg(1);
+-      foreach ($this->metadata_providers as $metadata_provider) {
+-        if ($metadata_provider->set($this, $key, $value)) {
+-          return TRUE;
+-        }
++    }
++    return FALSE;
++  }
++
++  public function getMetadata($key, $options = array()) {
++    foreach ($this->metadata['providers'] as $metadata_provider) {
++      if ($metadata_provider->has($this, $key)) {
++        return $metadata_provider->get($this, $key, $options);
+       }
+-      return FALSE;
+     }
++    return NULL;
+   }
+ }
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index 35eaae2..0cf317d 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -133,45 +133,6 @@ public function isSimple() {
+     return TRUE;
+   }
+ 
+-  public function duration($type = 'total', $threshold = 0.5) {
+-
+-    if ($type == 'total') {
+-      $point_a = $this->startPoint();
+-      $point_b = $this->endPoint();
+-      if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
+-        return strtotime($point_b->metadata('time')) - strtotime($point_a->metadata('time'));
+-      }
+-    }
+-
+-    if ($type == 'stop') {
+-      $duration = 0;
+-      foreach ($this->explode() as $LineString) {
+-        $point_a = $LineString->startPoint();
+-        $point_b = $LineString->endPoint();
+-        if (!is_null($point_a->metadata('time')) && !is_null($point_b->metadata('time'))) {
+-          $time = strtotime($point_b->metadata('time')) - strtotime($point_a->metadata('time'));
+-        } else {
+-          $time = 0;
+-        }
+-
+-        $length = $LineString->greatCircleLength();
+-
+-        if ($length >= 0 && $length <= $threshold) {
+-          $duration += $time;
+-        }
+-
+-      }
+-      return $duration;
+-    }
+-
+-    if ($type == 'moving') {
+-      return $this->duration('total', $threshold) - $this->duration('stop', $threshold);
+-    }
+-
+-    return 0;
+-
+-  }
+-
+   // Utility function to check if any line sigments intersect
+   // Derived from http://stackoverflow.com/questions/563198/how-do-you-detect-where-two-line-segments-intersect
+   public function lineSegmentIntersect($segment) {
+@@ -203,5 +164,7 @@ public function lineSegmentIntersect($segment) {
+     }
+     return FALSE;
+   }
++
++
+ }
+ 
+diff --git a/lib/geometry/TimeMetadataProvider.class.php b/lib/geometry/TimeMetadataProvider.class.php
+deleted file mode 100644
+index bb29651..0000000
+--- a/lib/geometry/TimeMetadataProvider.class.php
++++ /dev/null
+@@ -1,27 +0,0 @@
+-<?php
+-
+-class TimeMetadataProvider implements MetadataProvider {
+-
+-  public function has($target, $key) {
+-    return !empty($target->metadata[__CLASS__][$key]) || ($key === 'time' && ($target instanceof Collection));
+-  }
+-
+-  public function get($target, $key) {
+-    if ($this->has($target, $key)) {
+-      return $target->metadata[__CLASS__][$key];
+-    }
+-  }
+-
+-  public function set($target, $key, $value) {
+-    if ($key === 'time') {
+-      $target->metadata[__CLASS__][$key] = $value;
+-      return TRUE;
+-    }
+-    return FALSE;
+-  }
+-
+-  public function id() {
+-    return __CLASS__;
+-  }
+-
+-}
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+new file mode 100644
+index 0000000..cf2c60b
+--- /dev/null
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -0,0 +1,27 @@
++<?php
++
++class ElevationMetadataProvider implements MetadataProvider {
++
++  public function has($target, $key) {
++    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'ele') && ($target instanceof Point);
++  }
++
++  public function get($target, $key, $options) {
++    if ($this->has($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
++    }
++  }
++
++  public function set($target, $key, $value) {
++    if ($key === 'ele') {
++      $target->metadata['metadatas'][__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+diff --git a/lib/geometry/MetadataProvider.class.php b/lib/metadata/MetadataProvider.class.php
+similarity index 75%
+rename from lib/geometry/MetadataProvider.class.php
+rename to lib/metadata/MetadataProvider.class.php
+index 3bb1de4..7c4df8b 100644
+--- a/lib/geometry/MetadataProvider.class.php
++++ b/lib/metadata/MetadataProvider.class.php
+@@ -4,6 +4,6 @@ interface MetadataProvider
+ {
+     public function has($target, $key);
+     public function set($target, $key, $value);
+-    public function get($target, $key);
++    public function get($target, $key, $options);
+     public function id();
+ }
+diff --git a/lib/metadata/TimeMetadataProvider.class.php b/lib/metadata/TimeMetadataProvider.class.php
+new file mode 100644
+index 0000000..f4b8115
+--- /dev/null
++++ b/lib/metadata/TimeMetadataProvider.class.php
+@@ -0,0 +1,32 @@
++<?php
++
++class TimeMetadataProvider implements MetadataProvider {
++
++  public function has($target, $key) {
++    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'time') && ($target instanceof Point);
++  }
++
++  public function get($target, $key, $options) {
++
++    if ($target instanceof Point) {
++      if ($this->has($target, $key)) {
++        return $target->metadata['metadatas'][__CLASS__][$key];
++      }
++      return 0;
++    }
++
++  }
++
++  public function set($target, $key, $value) {
++    if ($key === 'time') {
++      $target->metadata['metadatas'][__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+
+From 5306f6e090edcd3068a534b1664044509795e4a6 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 15:35:46 +0200
+Subject: [PATCH 10/33] Adding provides method to MetadataProviders.
+
+---
+ lib/geometry/Geometry.class.php                  | 2 +-
+ lib/metadata/ElevationMetadataProvider.class.php | 7 +++++++
+ lib/metadata/MetadataProvider.class.php          | 1 +
+ lib/metadata/TimeMetadataProvider.class.php      | 7 +++++++
+ 4 files changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 1f84b4a..e5ae08d 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -354,7 +354,7 @@ public function setMetadata($key, $value) {
+ 
+   public function getMetadata($key, $options = array()) {
+     foreach ($this->metadata['providers'] as $metadata_provider) {
+-      if ($metadata_provider->has($this, $key)) {
++      if ($metadata_provider->provides($key)) {
+         return $metadata_provider->get($this, $key, $options);
+       }
+     }
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index cf2c60b..953d160 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -2,6 +2,13 @@
+ 
+ class ElevationMetadataProvider implements MetadataProvider {
+ 
++  public $capabilities = array('ele');
++
++  public function provides($key) {
++    if (in_array($key, $this->capabilities)) {return TRUE;};
++    return FALSE;
++  }
++
+   public function has($target, $key) {
+     return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'ele') && ($target instanceof Point);
+   }
+diff --git a/lib/metadata/MetadataProvider.class.php b/lib/metadata/MetadataProvider.class.php
+index 7c4df8b..eeb9b4a 100644
+--- a/lib/metadata/MetadataProvider.class.php
++++ b/lib/metadata/MetadataProvider.class.php
+@@ -2,6 +2,7 @@
+ 
+ interface MetadataProvider
+ {
++    public function provides($key);
+     public function has($target, $key);
+     public function set($target, $key, $value);
+     public function get($target, $key, $options);
+diff --git a/lib/metadata/TimeMetadataProvider.class.php b/lib/metadata/TimeMetadataProvider.class.php
+index f4b8115..74f27b4 100644
+--- a/lib/metadata/TimeMetadataProvider.class.php
++++ b/lib/metadata/TimeMetadataProvider.class.php
+@@ -2,6 +2,13 @@
+ 
+ class TimeMetadataProvider implements MetadataProvider {
+ 
++  public $capabilities = array('time');
++
++  public function provides($key) {
++    if (in_array($key, $this->capabilities)) {return TRUE;};
++    return FALSE;
++  }
++
+   public function has($target, $key) {
+     return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'time') && ($target instanceof Point);
+   }
+
+From dd47303c0aab1d68f56295f6d2549ea9d1e65422 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 15:37:20 +0200
+Subject: [PATCH 11/33] Adding DurationMetadataProvider.
+
+---
+ .../DurationMetadataProvider.class.php        | 82 +++++++++++++++++++
+ 1 file changed, 82 insertions(+)
+ create mode 100644 lib/metadata/DurationMetadataProvider.class.php
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+new file mode 100644
+index 0000000..799ad27
+--- /dev/null
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -0,0 +1,82 @@
++<?php
++
++class DurationMetadataProvider implements MetadataProvider {
++
++  public $capabilities = array('duration', 'movingDuration', 'stopDuration');
++
++  public function provides($key) {
++    if (in_array($key, $this->capabilities)) {return TRUE;};
++    return FALSE;
++  }
++
++  public function has($target, $key) {
++    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && (in_array($key, $this->capabilities)) && ($target instanceof Collection);
++  }
++
++  public function get($target, $key, $options) {
++
++    if ($target instanceof MultiLineString) {
++
++      if ($key == 'duration') {
++        $duration = 0;
++        foreach ($target->components as $component) {
++          $duration += $component->getMetadata('duration');
++        }
++        return $duration;
++      }
++    }
++
++
++    if ($target instanceof LineString) {
++      if ($key == 'duration') {
++        $point_a = $target->startPoint();
++        $point_b = $target->endPoint();
++
++        if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
++          $time = strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time'));
++        }
++        return $time;
++      }
++
++      if ($key == 'stopDuration') {
++        $duration = 0;
++        foreach ($target->explode() as $LineString) {
++          $point_a = $LineString->startPoint();
++          $point_b = $LineString->endPoint();
++          if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
++            $time = strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time'));
++          } else {
++            $time = 0;
++          }
++
++          $length = $LineString->greatCircleLength();
++
++          if ($length >= 0 && $length <= $options['threshold']) {
++            $duration += $time;
++          }
++
++        }
++
++        return $duration;
++      }
++
++      if ($key == 'movingDuration') {
++        return $this->get($target, 'duration', $options) - $this->get($target, 'stopDuration', $options);
++      }
++    }
++
++  }
++
++  public function set($target, $key, $value) {
++    if ($key === 'duration') {
++      $target->metadata['metadatas'][__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+
+From d9f8a659529db2b67afab520464d0cb7a8e1c27a Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 16:08:45 +0200
+Subject: [PATCH 12/33] Adding getMetadata for Collection. Geez.
+
+---
+ lib/geometry/MultiLineString.class.php           | 11 +++++++++++
+ lib/metadata/DurationMetadataProvider.class.php  | 16 ++++------------
+ lib/metadata/ElevationMetadataProvider.class.php |  6 +-----
+ lib/metadata/MetadataProvider.class.php          |  1 -
+ 4 files changed, 16 insertions(+), 18 deletions(-)
+
+diff --git a/lib/geometry/MultiLineString.class.php b/lib/geometry/MultiLineString.class.php
+index 33972a3..ecc0f96 100644
+--- a/lib/geometry/MultiLineString.class.php
++++ b/lib/geometry/MultiLineString.class.php
+@@ -15,5 +15,16 @@ public function isClosed() {
+     }
+     return TRUE;
+   }
++
++  public function getMetadata($key, $options = array()) {
++    foreach ($this->components as $component) {
++      foreach ($component->metadata['providers'] as $metadata_provider) {
++        if ($metadata_provider->provides($key)) {
++          return $metadata_provider->get($this, $key, $options);
++        }
++      }
++      return NULL;
++    }
++  }
+ }
+ 
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 799ad27..34e3efe 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -9,24 +9,16 @@ public function provides($key) {
+     return FALSE;
+   }
+ 
+-  public function has($target, $key) {
+-    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && (in_array($key, $this->capabilities)) && ($target instanceof Collection);
+-  }
+-
+   public function get($target, $key, $options) {
+ 
+     if ($target instanceof MultiLineString) {
+-
+-      if ($key == 'duration') {
+-        $duration = 0;
+-        foreach ($target->components as $component) {
+-          $duration += $component->getMetadata('duration');
+-        }
+-        return $duration;
++      $duration = 0;
++      foreach ($target->components as $component) {
++        $duration += $component->getMetadata($key, $options);
+       }
++      return $duration;
+     }
+ 
+-
+     if ($target instanceof LineString) {
+       if ($key == 'duration') {
+         $point_a = $target->startPoint();
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 953d160..8503d79 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -9,12 +9,8 @@ public function provides($key) {
+     return FALSE;
+   }
+ 
+-  public function has($target, $key) {
+-    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'ele') && ($target instanceof Point);
+-  }
+-
+   public function get($target, $key, $options) {
+-    if ($this->has($target, $key)) {
++    if ($this->provides($key)) {
+       return $target->metadata['metadatas'][__CLASS__][$key];
+     }
+   }
+diff --git a/lib/metadata/MetadataProvider.class.php b/lib/metadata/MetadataProvider.class.php
+index eeb9b4a..46eedf4 100644
+--- a/lib/metadata/MetadataProvider.class.php
++++ b/lib/metadata/MetadataProvider.class.php
+@@ -3,7 +3,6 @@
+ interface MetadataProvider
+ {
+     public function provides($key);
+-    public function has($target, $key);
+     public function set($target, $key, $value);
+     public function get($target, $key, $options);
+     public function id();
+
+From 0259a23cf0202fa0b07843707d1489c854e6e191 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 16:12:59 +0200
+Subject: [PATCH 13/33] Updates to TimeMetadataProvier.
+
+---
+ lib/metadata/TimeMetadataProvider.class.php | 8 +-------
+ 1 file changed, 1 insertion(+), 7 deletions(-)
+
+diff --git a/lib/metadata/TimeMetadataProvider.class.php b/lib/metadata/TimeMetadataProvider.class.php
+index 74f27b4..91c3d4c 100644
+--- a/lib/metadata/TimeMetadataProvider.class.php
++++ b/lib/metadata/TimeMetadataProvider.class.php
+@@ -9,19 +9,13 @@ public function provides($key) {
+     return FALSE;
+   }
+ 
+-  public function has($target, $key) {
+-    return isset($target->metadata['metadatas'][__CLASS__]) && isset($target->metadata['metadatas'][__CLASS__][$key]) && !is_null($target->metadata['metadatas'][__CLASS__][$key]) && ($key === 'time') && ($target instanceof Point);
+-  }
+-
+   public function get($target, $key, $options) {
+-
+     if ($target instanceof Point) {
+-      if ($this->has($target, $key)) {
++      if ($this->provides($key)) {
+         return $target->metadata['metadatas'][__CLASS__][$key];
+       }
+       return 0;
+     }
+-
+   }
+ 
+   public function set($target, $key, $value) {
+
+From 87b036d5e9e582adb8cb13093ce9709fde49680a Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 16:31:53 +0200
+Subject: [PATCH 14/33] Updates to ElevationMetadataProvider.
+
+---
+ .../ElevationMetadataProvider.class.php       | 46 ++++++++++++++++++-
+ 1 file changed, 45 insertions(+), 1 deletion(-)
+
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 8503d79..98b7242 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class ElevationMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('ele');
++  public $capabilities = array('ele', 'maxEle', 'minEle');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -10,9 +10,53 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++
++    if ($target instanceof LineString) {
++      if ($key === 'maxEle') {
++        $max = NULL;
++        foreach ($target->components as $component) {
++          if ($component->getMetadata('ele') > $max || is_null($max)) {
++            $max = $component->getMetadata('ele');
++          }
++        }
++        return $max;
++      }
++      if ($key === 'minEle') {
++        $min = NULL;
++        foreach ($target->components as $component) {
++          if ($component->getMetadata('ele') < $min || is_null($min)) {
++            $min = $component->getMetadata('ele');
++          }
++        }
++        return $min;
++      }
++    }
++
++    if ($target instanceof MultiLineString) {
++      if ($key === 'maxEle') {
++        $max = NULL;
++        foreach ($target->components as $component) {
++          if ($component->getMetadata($key) > $max || is_null($max)) {
++            $max = $component->getMetadata($key);
++          }
++        }
++        return $max;
++      }
++      if ($key === 'minEle') {
++        $min = NULL;
++        foreach ($target->components as $component) {
++          if ($component->getMetadata($key) < $min || is_null($min)) {
++            $min = $component->getMetadata($key);
++          }
++        }
++        return $min;
++      }
++    }
++
+     if ($this->provides($key)) {
+       return $target->metadata['metadatas'][__CLASS__][$key];
+     }
++
+   }
+ 
+   public function set($target, $key, $value) {
+
+From 0d30241ef777c7c826658a28655506bbd9964446 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 20:43:32 +0200
+Subject: [PATCH 15/33] New SpeedMetadataProvider.
+
+---
+ geoPHP.inc                                    |   1 +
+ lib/adapters/GPX.class.php                    |   2 +
+ .../DurationMetadataProvider.class.php        |   3 +-
+ lib/metadata/SpeedMetadataProvider.class.php  | 114 ++++++++++++++++++
+ 4 files changed, 119 insertions(+), 1 deletion(-)
+ create mode 100644 lib/metadata/SpeedMetadataProvider.class.php
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index c1a2731..994335d 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -12,6 +12,7 @@ include_once("lib/metadata/MetadataProvider.class.php");
+ include_once("lib/metadata/TimeMetadataProvider.class.php");
+ include_once("lib/metadata/ElevationMetadataProvider.class.php");
+ include_once("lib/metadata/DurationMetadataProvider.class.php");
++include_once("lib/metadata/SpeedMetadataProvider.class.php");
+ 
+ // Adapters
+ include_once("lib/adapters/GeoAdapter.class.php"); // Abtract class
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index 3436794..5c82c69 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -127,10 +127,12 @@ protected function parseTracks() {
+ 
+       if ($components) {
+         $duration_provider = new DurationMetadataProvider();
++        $speed_provider = new SpeedMetadataProvider();
+ 
+         $line = new LineString($components);
+         $line->registerMetadataProvider($duration_provider);
+         $line->registerMetadataProvider($ele_provider);
++        $line->registerMetadataProvider($speed_provider);
+         $lines[] = $line;
+       }
+     }
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 34e3efe..5089336 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -23,9 +23,10 @@ public function get($target, $key, $options) {
+       if ($key == 'duration') {
+         $point_a = $target->startPoint();
+         $point_b = $target->endPoint();
+-
+         if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+           $time = strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time'));
++        } else {
++          $time = 0;
+         }
+         return $time;
+       }
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+new file mode 100644
+index 0000000..10178bd
+--- /dev/null
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -0,0 +1,114 @@
++<?php
++
++class SpeedMetadataProvider implements MetadataProvider {
++
++  public $capabilities = array('averageSpeed', 'maxSpeed', 'minSpeed');
++
++  public function provides($key) {
++    if (in_array($key, $this->capabilities)) {return TRUE;};
++    return FALSE;
++  }
++
++  public function get($target, $key, $options) {
++
++    if ($target instanceof MultiLineString) {
++      if ($key === 'maxSpeed') {
++        $max = NULL;
++        foreach ($target->components as $component) {
++          $speed = $component->getMetadata($key, $options);
++          if (is_null($max) || $speed > $max) {
++            $max = $speed;
++          }
++        }
++        return $max;
++      }
++      if ($key === 'minSpeed') {
++        $min = NULL;
++        foreach ($target->components as $component) {
++          $speed = $component->getMetadata($key, $options);
++          if (is_null($min) || $speed < $min || $speed != 0) {
++            $min = $speed;
++          }
++        }
++        return $min;
++      }
++      if ($key === 'averageSpeed') {
++        $speeds = 0;
++        $count = count($target->components);
++        foreach ($target->components as $component) {
++          $speed = $component->getMetadata($key, $options);
++          if ($speed == 0) {
++            $count--;
++          } else {
++            $speeds += $component->getMetadata($key, $options);
++          }
++        }
++        $speed = $speeds / $count;
++      }
++      return $speed;
++    }
++
++    if ($target instanceof LineString) {
++      if ($key === 'maxSpeed') {
++        $numPoints = $target->numPoints();
++        $max = NULL;
++        for($i=1; $i<$numPoints; $i++) {
++          $point = $target->pointN($i);
++          $next_point = $target->pointN($i+1);
++
++          $linestring = new LineString(array($point, $next_point));
++          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
++          $linestring->registerMetadataProvider(new DurationMetadataProvider());
++
++          $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
++          $length = $linestring->greatCircleLength();
++          $speed = $length/$duration;
++          if (is_null($max) || $speed > $max) {
++            $max = $speed;
++          }
++        }
++        return $max;
++      }
++
++      if ($key === 'minSpeed') {
++        $numPoints = $target->numPoints();
++        $min = NULL;
++        for($i=1; $i<$numPoints; $i++) {
++          $point = $target->pointN($i);
++          $next_point = $target->pointN($i+1);
++
++          $linestring = new LineString(array($point, $next_point));
++          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
++          $linestring->registerMetadataProvider(new DurationMetadataProvider());
++
++          $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
++          $length = $linestring->greatCircleLength();
++          $speed = $length/$duration;
++          if (is_null($min) || $speed < $min || $speed != 0) {
++            $min = $speed;
++          }
++        }
++        return $min;
++      }
++
++      if ($key == 'averageSpeed') {
++        $time = $target->getMetadata('duration', array('threshold' => 0.5));
++        $length = $target->greatCircleLength();
++        return $length/$time; // Meter/Sec
++      }
++    }
++ }
++
++  public function set($target, $key, $value) {
++    if ($key === 'averageSpeed') {
++      $target->metadata['metadatas'][__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++}
+
+From cc878a62905b865acda7f034cc89ac46d8af9a93 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 17 Jul 2012 22:54:25 +0200
+Subject: [PATCH 16/33] Updates for SpeedMetadataProvider.
+
+---
+ lib/metadata/SpeedMetadataProvider.class.php | 28 ++++++++++++--------
+ 1 file changed, 17 insertions(+), 11 deletions(-)
+
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 10178bd..af73355 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -13,24 +13,30 @@ public function get($target, $key, $options) {
+ 
+     if ($target instanceof MultiLineString) {
+       if ($key === 'maxSpeed') {
+-        $max = NULL;
++        $speeds = array();
+         foreach ($target->components as $component) {
+-          $speed = $component->getMetadata($key, $options);
+-          if (is_null($max) || $speed > $max) {
+-            $max = $speed;
++          $speeds[] = $component->getMetadata($key, $options);
++        }
++        sort($speeds);
++        foreach($speeds as $speed) {
++          if ($speed != 0) {
++            return $speed;
+           }
+         }
+-        return $max;
+       }
+       if ($key === 'minSpeed') {
+-        $min = NULL;
+         foreach ($target->components as $component) {
+-          $speed = $component->getMetadata($key, $options);
+-          if (is_null($min) || $speed < $min || $speed != 0) {
+-            $min = $speed;
++          $speeds = array();
++          foreach ($target->components as $component) {
++            $speeds[] = $component->getMetadata($key, $options);
++          }
++          rsort($speeds);
++          foreach($speeds as $speed) {
++            if ($speed != 0) {
++              return $speed;
++            }
+           }
+         }
+-        return $min;
+       }
+       if ($key === 'averageSpeed') {
+         $speeds = 0;
+@@ -40,7 +46,7 @@ public function get($target, $key, $options) {
+           if ($speed == 0) {
+             $count--;
+           } else {
+-            $speeds += $component->getMetadata($key, $options);
++            $speeds += $speed;
+           }
+         }
+         $speed = $speeds / $count;
+
+From 4970912f3f6df01573b97dd59781893ed917ed40 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Wed, 18 Jul 2012 09:53:35 +0200
+Subject: [PATCH 17/33] More fix in SpeedMetadataProvider.
+
+---
+ lib/metadata/SpeedMetadataProvider.class.php | 43 ++++++++++----------
+ 1 file changed, 21 insertions(+), 22 deletions(-)
+
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index af73355..7c0e563 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -17,7 +17,7 @@ public function get($target, $key, $options) {
+         foreach ($target->components as $component) {
+           $speeds[] = $component->getMetadata($key, $options);
+         }
+-        sort($speeds);
++        rsort($speeds);
+         foreach($speeds as $speed) {
+           if ($speed != 0) {
+             return $speed;
+@@ -30,7 +30,7 @@ public function get($target, $key, $options) {
+           foreach ($target->components as $component) {
+             $speeds[] = $component->getMetadata($key, $options);
+           }
+-          rsort($speeds);
++          sort($speeds);
+           foreach($speeds as $speed) {
+             if ($speed != 0) {
+               return $speed;
+@@ -45,9 +45,8 @@ public function get($target, $key, $options) {
+           $speed = $component->getMetadata($key, $options);
+           if ($speed == 0) {
+             $count--;
+-          } else {
+-            $speeds += $speed;
+           }
++          $speeds += $speed;
+         }
+         $speed = $speeds / $count;
+       }
+@@ -57,44 +56,44 @@ public function get($target, $key, $options) {
+     if ($target instanceof LineString) {
+       if ($key === 'maxSpeed') {
+         $numPoints = $target->numPoints();
+-        $max = NULL;
++        $speeds = array();
+         for($i=1; $i<$numPoints; $i++) {
+-          $point = $target->pointN($i);
+-          $next_point = $target->pointN($i+1);
+-
+-          $linestring = new LineString(array($point, $next_point));
++          $linestring = new LineString(array($target->pointN($i), $target->pointN($i+1)));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+           $length = $linestring->greatCircleLength();
+-          $speed = $length/$duration;
+-          if (is_null($max) || $speed > $max) {
+-            $max = $speed;
++
++          $speeds[] = $length/$duration;
++        }
++        rsort($speeds);
++        foreach($speeds as $speed) {
++          if ($speed != 0) {
++            return $speed;
+           }
+         }
+-        return $max;
+       }
+ 
+       if ($key === 'minSpeed') {
+         $numPoints = $target->numPoints();
+-        $min = NULL;
++        $speeds = array();
+         for($i=1; $i<$numPoints; $i++) {
+-          $point = $target->pointN($i);
+-          $next_point = $target->pointN($i+1);
+-
+-          $linestring = new LineString(array($point, $next_point));
++          $linestring = new LineString(array($target->pointN($i), $target->pointN($i+1)));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+           $length = $linestring->greatCircleLength();
+-          $speed = $length/$duration;
+-          if (is_null($min) || $speed < $min || $speed != 0) {
+-            $min = $speed;
++
++          $speeds[] = $length/$duration;
++        }
++        sort($speeds);
++        foreach($speeds as $speed) {
++          if ($speed != 0) {
++            return $speed;
+           }
+         }
+-        return $min;
+       }
+ 
+       if ($key == 'averageSpeed') {
+
+From 19095590f2bbe4554ac6e7e19e5761939baf206a Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Wed, 18 Jul 2012 10:16:16 +0200
+Subject: [PATCH 18/33] Add average elevation in ElevationMetadataProvider.
+
+---
+ .../ElevationMetadataProvider.class.php       | 46 ++++++++++++++-----
+ lib/metadata/SpeedMetadataProvider.class.php  |  4 ++
+ 2 files changed, 39 insertions(+), 11 deletions(-)
+
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 98b7242..7f1929f 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class ElevationMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('ele', 'maxEle', 'minEle');
++  public $capabilities = array('ele', 'maxEle', 'minEle', 'averageEle');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -11,12 +11,12 @@ public function provides($key) {
+ 
+   public function get($target, $key, $options) {
+ 
+-    if ($target instanceof LineString) {
++    if ($target instanceof MultiLineString) {
+       if ($key === 'maxEle') {
+         $max = NULL;
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata('ele') > $max || is_null($max)) {
+-            $max = $component->getMetadata('ele');
++          if ($component->getMetadata($key) > $max || is_null($max)) {
++            $max = $component->getMetadata($key);
+           }
+         }
+         return $max;
+@@ -24,20 +24,32 @@ public function get($target, $key, $options) {
+       if ($key === 'minEle') {
+         $min = NULL;
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata('ele') < $min || is_null($min)) {
+-            $min = $component->getMetadata('ele');
++          if ($component->getMetadata($key) < $min || is_null($min)) {
++            $min = $component->getMetadata($key);
+           }
+         }
+         return $min;
+       }
++      if ($key === 'averageEle') {
++        $ele_total = 0;
++        $count = count($target->components);
++        foreach ($target->components as $component) {
++          $ele = $component->getMetadata($key, $options);
++          if ($ele == 0) {
++            $count--;
++          }
++          $ele_total += $ele;
++        }
++        return $ele_total / $count;
++      }
+     }
+ 
+-    if ($target instanceof MultiLineString) {
++    if ($target instanceof LineString) {
+       if ($key === 'maxEle') {
+         $max = NULL;
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata($key) > $max || is_null($max)) {
+-            $max = $component->getMetadata($key);
++          if ($component->getMetadata('ele') > $max || is_null($max)) {
++            $max = $component->getMetadata('ele');
+           }
+         }
+         return $max;
+@@ -45,12 +57,24 @@ public function get($target, $key, $options) {
+       if ($key === 'minEle') {
+         $min = NULL;
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata($key) < $min || is_null($min)) {
+-            $min = $component->getMetadata($key);
++          if ($component->getMetadata('ele') < $min || is_null($min)) {
++            $min = $component->getMetadata('ele');
+           }
+         }
+         return $min;
+       }
++      if ($key === 'averageEle') {
++        $ele_total = 0;
++        $count = count($target->components);
++        foreach ($target->components as $component) {
++          $ele = $component->getMetadata('ele', $options);
++          if ($ele == 0) {
++            $count--;
++          }
++          $ele_total += $ele;
++        }
++        return $ele_total / $count;
++      }
+     }
+ 
+     if ($this->provides($key)) {
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 7c0e563..c2fbae7 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -23,6 +23,7 @@ public function get($target, $key, $options) {
+             return $speed;
+           }
+         }
++        return 0;
+       }
+       if ($key === 'minSpeed') {
+         foreach ($target->components as $component) {
+@@ -37,6 +38,7 @@ public function get($target, $key, $options) {
+             }
+           }
+         }
++        return 0;
+       }
+       if ($key === 'averageSpeed') {
+         $speeds = 0;
+@@ -73,6 +75,7 @@ public function get($target, $key, $options) {
+             return $speed;
+           }
+         }
++        return 0;
+       }
+ 
+       if ($key === 'minSpeed') {
+@@ -94,6 +97,7 @@ public function get($target, $key, $options) {
+             return $speed;
+           }
+         }
++        return 0;
+       }
+ 
+       if ($key == 'averageSpeed') {
+
+From dca5aa12ba7d8f8a6f812e039779f74c468af051 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 10:05:28 +0200
+Subject: [PATCH 19/33] Updates and optimizations.
+
+---
+ lib/geometry/Geometry.class.php               |  3 ++
+ lib/geometry/MultiLineString.class.php        |  3 ++
+ lib/geometry/Point.class.php                  |  3 ++
+ .../ElevationMetadataProvider.class.php       |  5 +--
+ lib/metadata/SpeedMetadataProvider.class.php  | 34 +++++++++++++------
+ 5 files changed, 35 insertions(+), 13 deletions(-)
+
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index e5ae08d..787ae0c 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -353,6 +353,9 @@ public function setMetadata($key, $value) {
+   }
+ 
+   public function getMetadata($key, $options = array()) {
++
++    if (!isset($this->metadata['providers'])) {return NULL;}
++
+     foreach ($this->metadata['providers'] as $metadata_provider) {
+       if ($metadata_provider->provides($key)) {
+         return $metadata_provider->get($this, $key, $options);
+diff --git a/lib/geometry/MultiLineString.class.php b/lib/geometry/MultiLineString.class.php
+index ecc0f96..315978d 100644
+--- a/lib/geometry/MultiLineString.class.php
++++ b/lib/geometry/MultiLineString.class.php
+@@ -18,6 +18,9 @@ public function isClosed() {
+ 
+   public function getMetadata($key, $options = array()) {
+     foreach ($this->components as $component) {
++
++      if (!isset($component->metadata['providers'])) {continue;}
++
+       foreach ($component->metadata['providers'] as $metadata_provider) {
+         if ($metadata_provider->provides($key)) {
+           return $metadata_provider->get($this, $key, $options);
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index 533e9b3..b0beab0 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -9,6 +9,7 @@ class Point extends Geometry
+   public $coords = array(2);
+   protected $geom_type = 'Point';
+   protected $dimention = 2;
++  public $metadata = array();
+ 
+   /**
+    * Constructor
+@@ -31,6 +32,8 @@ public function __construct($x, $y, $z = NULL) {
+       $this->dimention = 3;
+     }
+ 
++    $this->metadata['metadatas'] = array();
++
+     // Convert to floatval in case they are passed in as a string or integer etc.
+     $x = floatval($x);
+     $y = floatval($y);
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 7f1929f..1127782 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -52,7 +52,7 @@ public function get($target, $key, $options) {
+             $max = $component->getMetadata('ele');
+           }
+         }
+-        return $max;
++        if (isset($max)) {return $max;} else {return 0;}
+       }
+       if ($key === 'minEle') {
+         $min = NULL;
+@@ -61,7 +61,7 @@ public function get($target, $key, $options) {
+             $min = $component->getMetadata('ele');
+           }
+         }
+-        return $min;
++        if (isset($min)) {return $min;} else {return 0;}
+       }
+       if ($key === 'averageEle') {
+         $ele_total = 0;
+@@ -73,6 +73,7 @@ public function get($target, $key, $options) {
+           }
+           $ele_total += $ele;
+         }
++        if ($count == 0) {return 0;}
+         return $ele_total / $count;
+       }
+     }
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index c2fbae7..247706f 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -57,17 +57,21 @@ public function get($target, $key, $options) {
+ 
+     if ($target instanceof LineString) {
+       if ($key === 'maxSpeed') {
+-        $numPoints = $target->numPoints();
+         $speeds = array();
+-        for($i=1; $i<$numPoints; $i++) {
+-          $linestring = new LineString(array($target->pointN($i), $target->pointN($i+1)));
++        $points = $target->getPoints();
++        foreach($points as $idx => $point) {
++          $next_point = next($points);
++
++          if (!is_object($next_point)) {continue;}
++          $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+           $length = $linestring->greatCircleLength();
+-
+-          $speeds[] = $length/$duration;
++          if ($duration != 0) {
++            $speeds[] = $length/$duration;
++          }
+         }
+         rsort($speeds);
+         foreach($speeds as $speed) {
+@@ -79,17 +83,22 @@ public function get($target, $key, $options) {
+       }
+ 
+       if ($key === 'minSpeed') {
+-        $numPoints = $target->numPoints();
+         $speeds = array();
+-        for($i=1; $i<$numPoints; $i++) {
+-          $linestring = new LineString(array($target->pointN($i), $target->pointN($i+1)));
++        $points = $target->getPoints();
++        foreach($points as $idx => $point) {
++          $next_point = next($points);
++
++          if (!is_object($next_point)) {continue;}
++
++          $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+           $length = $linestring->greatCircleLength();
+-
+-          $speeds[] = $length/$duration;
++          if ($duration != 0) {
++            $speeds[] = $length/$duration;
++          }
+         }
+         sort($speeds);
+         foreach($speeds as $speed) {
+@@ -103,7 +112,10 @@ public function get($target, $key, $options) {
+       if ($key == 'averageSpeed') {
+         $time = $target->getMetadata('duration', array('threshold' => 0.5));
+         $length = $target->greatCircleLength();
+-        return $length/$time; // Meter/Sec
++        if ($time != 0) {
++          return $length/$time; // Meter/Sec
++        }
++        return 0;
+       }
+     }
+  }
+
+From dcddaeb1660ed7078c6aaa4c65da56aa1151688e Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 10:43:42 +0200
+Subject: [PATCH 20/33] Use current() instead of next().
+
+---
+ lib/metadata/SpeedMetadataProvider.class.php | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 247706f..2ba0455 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -59,9 +59,8 @@ public function get($target, $key, $options) {
+       if ($key === 'maxSpeed') {
+         $speeds = array();
+         $points = $target->getPoints();
+-        foreach($points as $idx => $point) {
+-          $next_point = next($points);
+-
++        foreach($points as $point) {
++          $next_point = current($points);
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+@@ -85,11 +84,9 @@ public function get($target, $key, $options) {
+       if ($key === 'minSpeed') {
+         $speeds = array();
+         $points = $target->getPoints();
+-        foreach($points as $idx => $point) {
+-          $next_point = next($points);
+-
++        foreach($points as $point) {
++          $next_point = current($points);
+           if (!is_object($next_point)) {continue;}
+-
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+
+From 0750ceb45bede226c29c7571be7ea6ba38f11fa0 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 12:18:00 +0200
+Subject: [PATCH 21/33] Use next() instead of current() properly.
+
+---
+ lib/metadata/DurationMetadataProvider.class.php | 4 ++--
+ lib/metadata/SpeedMetadataProvider.class.php    | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 5089336..1cc4d09 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -24,7 +24,7 @@ public function get($target, $key, $options) {
+         $point_a = $target->startPoint();
+         $point_b = $target->endPoint();
+         if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+-          $time = strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time'));
++          $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+         } else {
+           $time = 0;
+         }
+@@ -37,7 +37,7 @@ public function get($target, $key, $options) {
+           $point_a = $LineString->startPoint();
+           $point_b = $LineString->endPoint();
+           if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+-            $time = strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time'));
++            $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+           } else {
+             $time = 0;
+           }
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 2ba0455..7246de7 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -60,7 +60,7 @@ public function get($target, $key, $options) {
+         $speeds = array();
+         $points = $target->getPoints();
+         foreach($points as $point) {
+-          $next_point = current($points);
++          $next_point = next($points);
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+@@ -85,7 +85,7 @@ public function get($target, $key, $options) {
+         $speeds = array();
+         $points = $target->getPoints();
+         foreach($points as $point) {
+-          $next_point = current($points);
++          $next_point = next($points);
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+
+From a1ae831a86a7efc4c492031e6d4548e81d40d32c Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 15:00:56 +0200
+Subject: [PATCH 22/33] Optimizations and cleanup.
+
+---
+ .../DurationMetadataProvider.class.php        |  9 ++++--
+ .../ElevationMetadataProvider.class.php       | 28 +++++++++++++++----
+ lib/metadata/SpeedMetadataProvider.class.php  | 12 +++++++-
+ lib/metadata/TimeMetadataProvider.class.php   |  2 +-
+ 4 files changed, 41 insertions(+), 10 deletions(-)
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 1cc4d09..c6d1adb 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -16,6 +16,7 @@ public function get($target, $key, $options) {
+       foreach ($target->components as $component) {
+         $duration += $component->getMetadata($key, $options);
+       }
++      $this->set($target, $key, $duration);
+       return $duration;
+     }
+ 
+@@ -28,6 +29,7 @@ public function get($target, $key, $options) {
+         } else {
+           $time = 0;
+         }
++        $this->set($target, 'duration', $time);
+         return $time;
+       }
+ 
+@@ -50,18 +52,21 @@ public function get($target, $key, $options) {
+ 
+         }
+ 
++        $this->set($target, 'stopDuration', $duration);
+         return $duration;
+       }
+ 
+       if ($key == 'movingDuration') {
+-        return $this->get($target, 'duration', $options) - $this->get($target, 'stopDuration', $options);
++        $tmp = $this->get($target, 'duration', $options) - $this->get($target, 'stopDuration', $options);
++        $this->set($target, 'movingDuration', $tmp);
++        return $tmp;
+       }
+     }
+ 
+   }
+ 
+   public function set($target, $key, $value) {
+-    if ($key === 'duration') {
++    if ($this->provides($key)) {
+       $target->metadata['metadatas'][__CLASS__][$key] = $value;
+       return TRUE;
+     }
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 1127782..ab446c9 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -19,6 +19,7 @@ public function get($target, $key, $options) {
+             $max = $component->getMetadata($key);
+           }
+         }
++        $this->set($target, 'maxEle', $max);
+         return $max;
+       }
+       if ($key === 'minEle') {
+@@ -28,6 +29,7 @@ public function get($target, $key, $options) {
+             $min = $component->getMetadata($key);
+           }
+         }
++        $this->set($target, 'minEle', $min);
+         return $min;
+       }
+       if ($key === 'averageEle') {
+@@ -40,7 +42,13 @@ public function get($target, $key, $options) {
+           }
+           $ele_total += $ele;
+         }
+-        return $ele_total / $count;
++
++        if ($count != 0) {
++          $average = $ele_total / $count;
++        }
++
++        $this->set($target, 'averageEle', $average);
++        return $average;
+       }
+     }
+ 
+@@ -52,7 +60,9 @@ public function get($target, $key, $options) {
+             $max = $component->getMetadata('ele');
+           }
+         }
+-        if (isset($max)) {return $max;} else {return 0;}
++        $max = isset($max) ? $max : 0;
++        $this->set($target, 'maxEle', $max);
++        return $max;
+       }
+       if ($key === 'minEle') {
+         $min = NULL;
+@@ -61,10 +71,13 @@ public function get($target, $key, $options) {
+             $min = $component->getMetadata('ele');
+           }
+         }
+-        if (isset($min)) {return $min;} else {return 0;}
++        $min = isset($min) ? $min : 0;
++        $this->set($target, 'minEle', $min);
++        return $min;
+       }
+       if ($key === 'averageEle') {
+         $ele_total = 0;
++        $average = 0;
+         $count = count($target->components);
+         foreach ($target->components as $component) {
+           $ele = $component->getMetadata('ele', $options);
+@@ -73,8 +86,11 @@ public function get($target, $key, $options) {
+           }
+           $ele_total += $ele;
+         }
+-        if ($count == 0) {return 0;}
+-        return $ele_total / $count;
++        if ($count != 0) {
++          $average = $ele_total / $count;
++        }
++        $this->set($target, 'averageEle', $average);
++        return $average;
+       }
+     }
+ 
+@@ -85,7 +101,7 @@ public function get($target, $key, $options) {
+   }
+ 
+   public function set($target, $key, $value) {
+-    if ($key === 'ele') {
++    if ($this->provides($key)) {
+       $target->metadata['metadatas'][__CLASS__][$key] = $value;
+       return TRUE;
+     }
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 7246de7..90166d1 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -20,9 +20,11 @@ public function get($target, $key, $options) {
+         rsort($speeds);
+         foreach($speeds as $speed) {
+           if ($speed != 0) {
++            $this->set($target, 'maxSpeed', $speed);
+             return $speed;
+           }
+         }
++        $this->set($target, 'maxSpeed', 0);
+         return 0;
+       }
+       if ($key === 'minSpeed') {
+@@ -34,10 +36,12 @@ public function get($target, $key, $options) {
+           sort($speeds);
+           foreach($speeds as $speed) {
+             if ($speed != 0) {
++              $this->set($target, 'minSpeed', $speed);
+               return $speed;
+             }
+           }
+         }
++        $this->set($target, 'minSpeed', 0);
+         return 0;
+       }
+       if ($key === 'averageSpeed') {
+@@ -52,6 +56,7 @@ public function get($target, $key, $options) {
+         }
+         $speed = $speeds / $count;
+       }
++      $this->set($target, 'averageSpeed', $speed);
+       return $speed;
+     }
+ 
+@@ -75,9 +80,11 @@ public function get($target, $key, $options) {
+         rsort($speeds);
+         foreach($speeds as $speed) {
+           if ($speed != 0) {
++            $this->set($target, 'maxSpeed', $speed);
+             return $speed;
+           }
+         }
++        $this->set($target, 'maxSpeed', 0);
+         return 0;
+       }
+ 
+@@ -100,9 +107,11 @@ public function get($target, $key, $options) {
+         sort($speeds);
+         foreach($speeds as $speed) {
+           if ($speed != 0) {
++            $this->set($target, 'minSpeed', $speed);
+             return $speed;
+           }
+         }
++        $this->set($target, 'minSpeed', 0);
+         return 0;
+       }
+ 
+@@ -110,6 +119,7 @@ public function get($target, $key, $options) {
+         $time = $target->getMetadata('duration', array('threshold' => 0.5));
+         $length = $target->greatCircleLength();
+         if ($time != 0) {
++          $this->set($target, 'averageSpeed', $length/$time);
+           return $length/$time; // Meter/Sec
+         }
+         return 0;
+@@ -118,7 +128,7 @@ public function get($target, $key, $options) {
+  }
+ 
+   public function set($target, $key, $value) {
+-    if ($key === 'averageSpeed') {
++    if ($this->provides($key)) {
+       $target->metadata['metadatas'][__CLASS__][$key] = $value;
+       return TRUE;
+     }
+diff --git a/lib/metadata/TimeMetadataProvider.class.php b/lib/metadata/TimeMetadataProvider.class.php
+index 91c3d4c..cb7b69b 100644
+--- a/lib/metadata/TimeMetadataProvider.class.php
++++ b/lib/metadata/TimeMetadataProvider.class.php
+@@ -19,7 +19,7 @@ public function get($target, $key, $options) {
+   }
+ 
+   public function set($target, $key, $value) {
+-    if ($key === 'time') {
++    if ($this->provides($key)) {
+       $target->metadata['metadatas'][__CLASS__][$key] = $value;
+       return TRUE;
+     }
+
+From 4d985e80b3bbd4ce1b6f55d6c97bf64376243841 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 19:32:35 +0200
+Subject: [PATCH 23/33] Remove duration() method from Point class, now useless.
+
+---
+ lib/geometry/Point.class.php | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index b0beab0..e39e0f6 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -137,10 +137,6 @@ public function isSimple() {
+     return TRUE;
+   }
+ 
+-  public function duration() {
+-    return 0;
+-  }
+-
+   // Not valid for this geometry type
+   public function numGeometries()    { return NULL; }
+   public function geometryN($n)      { return NULL; }
+
+From 82872985249a007f7adf939ea709291e79faf525 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 21:02:56 +0200
+Subject: [PATCH 24/33] Use for loop instead of foreach.
+
+---
+ lib/geometry/Collection.class.php             |  4 +-
+ lib/geometry/LineString.class.php             | 43 ++++++++++---------
+ .../DurationMetadataProvider.class.php        | 14 ++++--
+ lib/metadata/SpeedMetadataProvider.class.php  | 12 ++++--
+ 4 files changed, 43 insertions(+), 30 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index db0f62f..a1ec1ab 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -174,7 +174,9 @@ public function length() {
+   public function greatCircleLength($radius = 6378137) {
+     $length = 0;
+     foreach ($this->components as $delta => $component) {
+-      $length += $component->greatCircleLength($radius);
++      $tmp = $component->greatCircleLength($radius);
++      dpm($tmp, 'Composant ' . $delta);
++      $length += $tmp;
+     }
+     return $length;
+   }
+diff --git a/lib/geometry/LineString.class.php b/lib/geometry/LineString.class.php
+index 0cf317d..bc54270 100644
+--- a/lib/geometry/LineString.class.php
++++ b/lib/geometry/LineString.class.php
+@@ -77,27 +77,28 @@ public function length() {
+ 
+   public function greatCircleLength($radius = 6378137) {
+     $length = 0;
+-    foreach ($this->getPoints() as $delta => $point) {
+-      $previous_point = $this->geometryN($delta);
+-      if ($previous_point) {
+-        // Great circle method
+-        $lat1 = deg2rad($point->getY());
+-        $lat2 = deg2rad($previous_point->getY());
+-        $lon1 = deg2rad($point->getX());
+-        $lon2 = deg2rad($previous_point->getX());
+-        $dlon = $lon2 - $lon1;
+-        $length +=
+-          $radius *
+-            atan2(
+-              sqrt(
+-                pow(cos($lat2) * sin($dlon), 2) +
+-                  pow(cos($lat1) * sin($lat2) - sin($lat1) * cos($lat2) * cos($dlon), 2)
+-              )
+-              ,
+-              sin($lat1) * sin($lat2) +
+-                cos($lat1) * cos($lat2) * cos($dlon)
+-            );
+-      }
++    $points = $this->getPoints();
++    for($i=0; $i<$this->numPoints()-1; $i++) {
++      $point = $points[$i];
++      $next_point = $points[$i+1];
++      if (!is_object($next_point)) {continue;}
++      // Great circle method
++      $lat1 = deg2rad($point->getY());
++      $lat2 = deg2rad($next_point->getY());
++      $lon1 = deg2rad($point->getX());
++      $lon2 = deg2rad($next_point->getX());
++      $dlon = $lon2 - $lon1;
++      $length +=
++        $radius *
++          atan2(
++            sqrt(
++              pow(cos($lat2) * sin($dlon), 2) +
++                pow(cos($lat1) * sin($lat2) - sin($lat1) * cos($lat2) * cos($dlon), 2)
++            )
++            ,
++            sin($lat1) * sin($lat2) +
++              cos($lat1) * cos($lat2) * cos($dlon)
++          );
+     }
+     return $length;
+   }
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index c6d1adb..90eec1f 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -35,16 +35,22 @@ public function get($target, $key, $options) {
+ 
+       if ($key == 'stopDuration') {
+         $duration = 0;
+-        foreach ($target->explode() as $LineString) {
+-          $point_a = $LineString->startPoint();
+-          $point_b = $LineString->endPoint();
++        $points = $target->getPoints();
++        foreach ($points as $point) {
++          $point_a = $point;
++          $point_b = current($points);
++
++          $linestring = new LineString(array($point_a, $point_b));
++          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
++          $linestring->registerMetadataProvider(new DurationMetadataProvider());
++
+           if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+             $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+           } else {
+             $time = 0;
+           }
+ 
+-          $length = $LineString->greatCircleLength();
++          $length = $linestring->greatCircleLength();
+ 
+           if ($length >= 0 && $length <= $options['threshold']) {
+             $duration += $time;
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 90166d1..7682977 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -64,8 +64,9 @@ public function get($target, $key, $options) {
+       if ($key === 'maxSpeed') {
+         $speeds = array();
+         $points = $target->getPoints();
+-        foreach($points as $point) {
+-          $next_point = next($points);
++        for($i=0; $i<$target->numPoints()-1; $i++) {
++          $point = $points[$i];
++          $next_point = $points[$i+1];
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+@@ -74,6 +75,7 @@ public function get($target, $key, $options) {
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+           $length = $linestring->greatCircleLength();
+           if ($duration != 0) {
++            //dpm("$length meters in $duration");
+             $speeds[] = $length/$duration;
+           }
+         }
+@@ -91,8 +93,10 @@ public function get($target, $key, $options) {
+       if ($key === 'minSpeed') {
+         $speeds = array();
+         $points = $target->getPoints();
+-        foreach($points as $point) {
+-          $next_point = next($points);
++        for($i=0; $i<$target->numPoints()-1; $i++) {
++          $point = $points[$i];
++          $next_point = $points[$i+1];
++          if (!is_object($next_point)) {continue;}
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+           $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+
+From ed5248dcabc580adfe730cb288354a1f3dbe7e1e Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Thu, 19 Jul 2012 21:10:51 +0200
+Subject: [PATCH 25/33] Forgot to remove debug stuff.
+
+---
+ lib/geometry/Collection.class.php | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index a1ec1ab..e36a0de 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -175,7 +175,6 @@ public function greatCircleLength($radius = 6378137) {
+     $length = 0;
+     foreach ($this->components as $delta => $component) {
+       $tmp = $component->greatCircleLength($radius);
+-      dpm($tmp, 'Composant ' . $delta);
+       $length += $tmp;
+     }
+     return $length;
+
+From f4545e3fee892aaae486eea2673dd3fb3796ef46 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Sun, 22 Jul 2012 23:23:20 +0200
+Subject: [PATCH 26/33] Fix bug in Duration Metadata.
+
+---
+ lib/metadata/DurationMetadataProvider.class.php | 11 ++++-------
+ 1 file changed, 4 insertions(+), 7 deletions(-)
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 90eec1f..b88f3d9 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -36,13 +36,11 @@ public function get($target, $key, $options) {
+       if ($key == 'stopDuration') {
+         $duration = 0;
+         $points = $target->getPoints();
+-        foreach ($points as $point) {
+-          $point_a = $point;
+-          $point_b = current($points);
++        for($i=0; $i<$target->numPoints()-1; $i++) {
++          $point_a = $points[$i];
++          $point_b = $points[$i+1];
+ 
+           $linestring = new LineString(array($point_a, $point_b));
+-          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+-          $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+             $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+@@ -52,10 +50,9 @@ public function get($target, $key, $options) {
+ 
+           $length = $linestring->greatCircleLength();
+ 
+-          if ($length >= 0 && $length <= $options['threshold']) {
++          if ($length > 0 && $length <= $options['threshold']) {
+             $duration += $time;
+           }
+-
+         }
+ 
+         $this->set($target, 'stopDuration', $duration);
+
+From 0d99afcfcea82aa79646d69c9ce614578ba91b38 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 23 Jul 2012 00:17:04 +0200
+Subject: [PATCH 27/33] Remove useless stuff. Improved the Elevation Metadata
+ Provider.
+
+---
+ .../ElevationMetadataProvider.class.php       | 42 +++++++++----------
+ lib/metadata/SpeedMetadataProvider.class.php  |  1 -
+ 2 files changed, 20 insertions(+), 23 deletions(-)
+
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index ab446c9..3cf3fe8 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -33,18 +33,16 @@ public function get($target, $key, $options) {
+         return $min;
+       }
+       if ($key === 'averageEle') {
+-        $ele_total = 0;
+         $count = count($target->components);
+         foreach ($target->components as $component) {
+           $ele = $component->getMetadata($key, $options);
+-          if ($ele == 0) {
+-            $count--;
++          if ($ele != 0) {
++            $ele_array[] = $ele;
+           }
+-          $ele_total += $ele;
+         }
+ 
+         if ($count != 0) {
+-          $average = $ele_total / $count;
++          $average = array_sum($ele_array) / $count;
+         }
+ 
+         $this->set($target, 'averageEle', $average);
+@@ -55,40 +53,40 @@ public function get($target, $key, $options) {
+     if ($target instanceof LineString) {
+       if ($key === 'maxEle') {
+         $max = NULL;
++        $maxs = array();
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata('ele') > $max || is_null($max)) {
+-            $max = $component->getMetadata('ele');
+-          }
++          $maxs[] = $component->getMetadata('ele');
+         }
+-        $max = isset($max) ? $max : 0;
++        $maxs = array_filter($maxs);
++        rsort($maxs);
++        $max = $maxs[0];
+         $this->set($target, 'maxEle', $max);
+         return $max;
+       }
+       if ($key === 'minEle') {
+         $min = NULL;
++        $mins = array();
+         foreach ($target->components as $component) {
+-          if ($component->getMetadata('ele') < $min || is_null($min)) {
+-            $min = $component->getMetadata('ele');
+-          }
++          $mins[] = $component->getMetadata('ele');
+         }
+-        $min = isset($min) ? $min : 0;
++        $mins = array_filter($mins);
++        sort($mins);
++        $min = $mins[0];
+         $this->set($target, 'minEle', $min);
+         return $min;
+       }
+       if ($key === 'averageEle') {
+-        $ele_total = 0;
+-        $average = 0;
+-        $count = count($target->components);
+         foreach ($target->components as $component) {
+-          $ele = $component->getMetadata('ele', $options);
+-          if ($ele == 0) {
+-            $count--;
+-          }
+-          $ele_total += $ele;
++          $ele_array[] = $component->getMetadata('ele', $options);
+         }
++
++        $ele_array = array_filter($ele_array);
++        $count = count($ele_array);
++
+         if ($count != 0) {
+-          $average = $ele_total / $count;
++          $average = array_sum($ele_array) / $count;
+         }
++
+         $this->set($target, 'averageEle', $average);
+         return $average;
+       }
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 7682977..00389cc 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -99,7 +99,6 @@ public function get($target, $key, $options) {
+           if (!is_object($next_point)) {continue;}
+           if (!is_object($next_point)) {continue;}
+           $linestring = new LineString(array($point, $next_point));
+-          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+
+From 1ec4ea1c5a1797d3d5f50bd1f10af9046bfeba87 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 23 Jul 2012 22:18:04 +0200
+Subject: [PATCH 28/33] Rewriting the Elevation Metadata Provider, less code,
+ less loops, more speed.
+
+---
+ .../ElevationMetadataProvider.class.php       | 107 +++++-------------
+ 1 file changed, 31 insertions(+), 76 deletions(-)
+
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index 3cf3fe8..b1bb724 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class ElevationMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('ele', 'maxEle', 'minEle', 'averageEle');
++  public $capabilities = array('ele', 'maxEle', 'minEle', 'averageEle', 'elevations');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -11,91 +11,46 @@ public function provides($key) {
+ 
+   public function get($target, $key, $options) {
+ 
+-    if ($target instanceof MultiLineString) {
+-      if ($key === 'maxEle') {
+-        $max = NULL;
+-        foreach ($target->components as $component) {
+-          if ($component->getMetadata($key) > $max || is_null($max)) {
+-            $max = $component->getMetadata($key);
+-          }
+-        }
+-        $this->set($target, 'maxEle', $max);
+-        return $max;
+-      }
+-      if ($key === 'minEle') {
+-        $min = NULL;
+-        foreach ($target->components as $component) {
+-          if ($component->getMetadata($key) < $min || is_null($min)) {
+-            $min = $component->getMetadata($key);
+-          }
+-        }
+-        $this->set($target, 'minEle', $min);
+-        return $min;
+-      }
+-      if ($key === 'averageEle') {
+-        $count = count($target->components);
+-        foreach ($target->components as $component) {
+-          $ele = $component->getMetadata($key, $options);
+-          if ($ele != 0) {
+-            $ele_array[] = $ele;
+-          }
+-        }
++    if (!$this->provides($key)) {return FALSE;}
+ 
+-        if ($count != 0) {
+-          $average = array_sum($ele_array) / $count;
++    if ($key == 'elevations') {
++      if (!isset($target->metadata['metadatas'][__CLASS__]['elevations'])) {
++        $points = $target->getPoints();
++        foreach($points as $point) {
++          $elevations[] = $point->getMetadata('ele');
+         }
+-
+-        $this->set($target, 'averageEle', $average);
+-        return $average;
++        $elevations = array_filter($elevations);
++        $this->set($target, 'elevations', $elevations);
++        return $elevations;
++      } else {
++        return $target->metadata['metadatas'][__CLASS__]['elevations'];
+       }
+     }
+ 
+-    if ($target instanceof LineString) {
+-      if ($key === 'maxEle') {
+-        $max = NULL;
+-        $maxs = array();
+-        foreach ($target->components as $component) {
+-          $maxs[] = $component->getMetadata('ele');
+-        }
+-        $maxs = array_filter($maxs);
+-        rsort($maxs);
+-        $max = $maxs[0];
+-        $this->set($target, 'maxEle', $max);
+-        return $max;
+-      }
+-      if ($key === 'minEle') {
+-        $min = NULL;
+-        $mins = array();
+-        foreach ($target->components as $component) {
+-          $mins[] = $component->getMetadata('ele');
+-        }
+-        $mins = array_filter($mins);
+-        sort($mins);
+-        $min = $mins[0];
+-        $this->set($target, 'minEle', $min);
+-        return $min;
+-      }
+-      if ($key === 'averageEle') {
+-        foreach ($target->components as $component) {
+-          $ele_array[] = $component->getMetadata('ele', $options);
+-        }
+-
+-        $ele_array = array_filter($ele_array);
+-        $count = count($ele_array);
+-
+-        if ($count != 0) {
+-          $average = array_sum($ele_array) / $count;
+-        }
+-
+-        $this->set($target, 'averageEle', $average);
++    if ($key == 'averageEle') {
++      $elevations = $target->getMetadata('elevations');
++      $count = count($elevations);
++      if ($count != 0) {
++        $average = array_sum($elevations) / $count;
++        $this->set($target, $key, $average);
+         return $average;
+       }
++      return 0;
+     }
+-
+-    if ($this->provides($key)) {
+-      return $target->metadata['metadatas'][__CLASS__][$key];
++    if ($key == 'maxEle') {
++      $elevations = $target->getMetadata('elevations');
++      rsort($elevations);
++      $this->set($target, $key, current($elevations));
++      return current($elevations);
++    }
++    if ($key == 'minEle') {
++      $elevations = $target->getMetadata('elevations');
++      sort($elevations);
++      $this->set($target, $key, current($elevations));
++      return current($elevations);
+     }
+ 
++    return $target->metadata['metadatas'][__CLASS__][$key];
+   }
+ 
+   public function set($target, $key, $value) {
+
+From ce811e3ce22b56748760f3833c18fc74fb4f74b7 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 23 Jul 2012 22:39:26 +0200
+Subject: [PATCH 29/33] Rewriting the Speed Metadata Provider, less code, less
+ loops, more speed.
+
+---
+ lib/metadata/SpeedMetadataProvider.class.php | 147 ++++++-------------
+ 1 file changed, 41 insertions(+), 106 deletions(-)
+
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 00389cc..88b64c2 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class SpeedMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('averageSpeed', 'maxSpeed', 'minSpeed');
++  public $capabilities = array('averageSpeed', 'maxSpeed', 'minSpeed', 'speeds');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -10,125 +10,60 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++    if (!$this->provides($key)) {return FALSE;}
+ 
+-    if ($target instanceof MultiLineString) {
+-      if ($key === 'maxSpeed') {
+-        $speeds = array();
+-        foreach ($target->components as $component) {
+-          $speeds[] = $component->getMetadata($key, $options);
+-        }
+-        rsort($speeds);
+-        foreach($speeds as $speed) {
+-          if ($speed != 0) {
+-            $this->set($target, 'maxSpeed', $speed);
+-            return $speed;
+-          }
+-        }
+-        $this->set($target, 'maxSpeed', 0);
+-        return 0;
+-      }
+-      if ($key === 'minSpeed') {
+-        foreach ($target->components as $component) {
+-          $speeds = array();
+-          foreach ($target->components as $component) {
+-            $speeds[] = $component->getMetadata($key, $options);
+-          }
+-          sort($speeds);
+-          foreach($speeds as $speed) {
+-            if ($speed != 0) {
+-              $this->set($target, 'minSpeed', $speed);
+-              return $speed;
+-            }
+-          }
+-        }
+-        $this->set($target, 'minSpeed', 0);
+-        return 0;
+-      }
+-      if ($key === 'averageSpeed') {
+-        $speeds = 0;
+-        $count = count($target->components);
+-        foreach ($target->components as $component) {
+-          $speed = $component->getMetadata($key, $options);
+-          if ($speed == 0) {
+-            $count--;
+-          }
+-          $speeds += $speed;
+-        }
+-        $speed = $speeds / $count;
+-      }
+-      $this->set($target, 'averageSpeed', $speed);
+-      return $speed;
+-    }
+-
+-    if ($target instanceof LineString) {
+-      if ($key === 'maxSpeed') {
+-        $speeds = array();
++    if ($key == 'speeds') {
++      if (!isset($target->metadata['metadatas'][__CLASS__]['speeds'])) {
+         $points = $target->getPoints();
+-        for($i=0; $i<$target->numPoints()-1; $i++) {
+-          $point = $points[$i];
+-          $next_point = $points[$i+1];
+-          if (!is_object($next_point)) {continue;}
+-          $linestring = new LineString(array($point, $next_point));
+-          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+-          $linestring->registerMetadataProvider(new DurationMetadataProvider());
++        $count = count($points);
++        for($i=0; $i<$count-1; $i++) {
++          $current = $points[$i];
++          $next = $points[$i+1];
+ 
+-          $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
+-          $length = $linestring->greatCircleLength();
+-          if ($duration != 0) {
+-            //dpm("$length meters in $duration");
+-            $speeds[] = $length/$duration;
+-          }
+-        }
+-        rsort($speeds);
+-        foreach($speeds as $speed) {
+-          if ($speed != 0) {
+-            $this->set($target, 'maxSpeed', $speed);
+-            return $speed;
+-          }
+-        }
+-        $this->set($target, 'maxSpeed', 0);
+-        return 0;
+-      }
++          if (!($next instanceof Point)) {return 0;}
+ 
+-      if ($key === 'minSpeed') {
+-        $speeds = array();
+-        $points = $target->getPoints();
+-        for($i=0; $i<$target->numPoints()-1; $i++) {
+-          $point = $points[$i];
+-          $next_point = $points[$i+1];
+-          if (!is_object($next_point)) {continue;}
+-          if (!is_object($next_point)) {continue;}
+-          $linestring = new LineString(array($point, $next_point));
++          $linestring = new LineString(array($current, $next));
++          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+-          $duration = $linestring->getMetadata('duration', array('threshold' => 0.5));
++          $duration = $linestring->getMetadata('duration', $options);
+           $length = $linestring->greatCircleLength();
+-          if ($duration != 0) {
++          if ($duration != 0 && $length != 0) {
+             $speeds[] = $length/$duration;
+           }
+         }
+-        sort($speeds);
+-        foreach($speeds as $speed) {
+-          if ($speed != 0) {
+-            $this->set($target, 'minSpeed', $speed);
+-            return $speed;
+-          }
+-        }
+-        $this->set($target, 'minSpeed', 0);
+-        return 0;
++        $this->set($target, 'speeds', $speeds);
++        return $speeds;
++      } else {
++        return $target->metadata['metadatas'][__CLASS__]['speeds'];
+       }
++    }
+ 
+-      if ($key == 'averageSpeed') {
+-        $time = $target->getMetadata('duration', array('threshold' => 0.5));
+-        $length = $target->greatCircleLength();
+-        if ($time != 0) {
+-          $this->set($target, 'averageSpeed', $length/$time);
+-          return $length/$time; // Meter/Sec
+-        }
+-        return 0;
++    if ($key == 'averageSpeed') {
++      $speeds = $target->getMetadata('speeds');
++      $count = count($speeds);
++      if ($count != 0) {
++        $average = array_sum($speeds) / $count;
++        $this->set($target, $key, $average);
++        return $average;
+       }
++      return 0;
+     }
+- }
++    if ($key == 'maxSpeed') {
++      $speeds = $target->getMetadata('speeds');
++      rsort($speeds);
++      $this->set($target, $key, current($speeds));
++      return current($speeds);
++    }
++    if ($key == 'minSpeed') {
++      $speeds = $target->getMetadata('speeds');
++      sort($speeds);
++      $this->set($target, $key, current($speeds));
++      return current($speeds);
++    }
++
++    return $target->metadata['metadatas'][__CLASS__][$key];
++  }
+ 
+   public function set($target, $key, $value) {
+     if ($this->provides($key)) {
+
+From 8a47a67b4129d071ed625d8a899660c6888df380 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 23 Jul 2012 22:57:52 +0200
+Subject: [PATCH 30/33] Rewriting the Duration Metadata Provider, less code,
+ less loops, more speed.
+
+---
+ .../DurationMetadataProvider.class.php        | 92 +++++++++----------
+ 1 file changed, 46 insertions(+), 46 deletions(-)
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index b88f3d9..35c3bf4 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class DurationMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('duration', 'movingDuration', 'stopDuration');
++  public $capabilities = array('duration', 'movingDuration', 'stopDuration', 'durations', 'stopDurations');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -10,62 +10,62 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++    if (!$this->provides($key)) {return FALSE;}
+ 
+-    if ($target instanceof MultiLineString) {
+-      $duration = 0;
+-      foreach ($target->components as $component) {
+-        $duration += $component->getMetadata($key, $options);
+-      }
+-      $this->set($target, $key, $duration);
+-      return $duration;
+-    }
+-
+-    if ($target instanceof LineString) {
+-      if ($key == 'duration') {
+-        $point_a = $target->startPoint();
+-        $point_b = $target->endPoint();
+-        if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+-          $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+-        } else {
+-          $time = 0;
++    if ($key == 'durations') {
++      if (!isset($target->metadata['metadatas'][__CLASS__]['durations'])) {
++        $points = $target->getPoints();
++        $count = count($points);
++        for($i=0; $i<$count-1; $i++) {
++          $current = $points[$i];
++          $next = $points[$i+1];
++          if (!($next instanceof Point)) {return 0;}
++          $durations[] = abs(strtotime($current->getMetadata('time')) - strtotime($next->getMetadata('time')));
+         }
+-        $this->set($target, 'duration', $time);
+-        return $time;
++        $this->set($target, 'durations', $durations);
++        return $durations;
++      } else {
++        return $target->metadata['metadatas'][__CLASS__]['durations'];
+       }
++    }
+ 
+-      if ($key == 'stopDuration') {
+-        $duration = 0;
++    if ($key == 'stopDurations') {
++      if (!isset($target->metadata['metadatas'][__CLASS__]['stopDurations'])) {
+         $points = $target->getPoints();
+-        for($i=0; $i<$target->numPoints()-1; $i++) {
+-          $point_a = $points[$i];
+-          $point_b = $points[$i+1];
+-
+-          $linestring = new LineString(array($point_a, $point_b));
+-
+-          if (!is_null($point_a->getMetadata('time')) && !is_null($point_b->getMetadata('time'))) {
+-            $time = abs(strtotime($point_b->getMetadata('time')) - strtotime($point_a->getMetadata('time')));
+-          } else {
+-            $time = 0;
+-          }
+-
+-          $length = $linestring->greatCircleLength();
+-
+-          if ($length > 0 && $length <= $options['threshold']) {
+-            $duration += $time;
++        $count = count($points);
++        for($i=0; $i<$count-1; $i++) {
++          $current = $points[$i];
++          $next = $points[$i+1];
++          if (!($next instanceof Point)) {return 0;}
++          $linestring = new LineString(array($current, $next));
++          $duration = abs(strtotime($current->getMetadata('time')) - strtotime($next->getMetadata('time')));
++          if ($linestring->greatCircleLength() < $options['threshold']) {
++            $durations[] = $duration;
+           }
+         }
+-
+-        $this->set($target, 'stopDuration', $duration);
+-        return $duration;
++        $this->set($target, 'stopDurations', $durations);
++        return $durations;
++      } else {
++        return $target->metadata['metadatas'][__CLASS__]['stopDurations'];
+       }
++    }
+ 
+-      if ($key == 'movingDuration') {
+-        $tmp = $this->get($target, 'duration', $options) - $this->get($target, 'stopDuration', $options);
+-        $this->set($target, 'movingDuration', $tmp);
+-        return $tmp;
+-      }
++    if ($key == 'duration') {
++      $durations = $target->getMetadata('durations');
++      return array_sum($durations);
++    }
++
++    if ($key == 'stopDuration') {
++      $durations = $target->getMetadata('stopDurations', $options);
++      return array_sum($durations);
++    }
++
++    if ($key == 'movingDuration') {
++      return array_sum($target->getMetadata('durations')) -
++        array_sum($target->getMetadata('stopDurations'));
+     }
+ 
++    return $target->metadata['metadatas'][__CLASS__][$key];
+   }
+ 
+   public function set($target, $key, $value) {
+
+From 7b9433acf1d5072b77ee025ee0d70a8fc3630b83 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Tue, 24 Jul 2012 12:47:46 +0200
+Subject: [PATCH 31/33] Update Duration Metadata Provider, more speed.
+
+---
+ .../DurationMetadataProvider.class.php        | 45 +++++++++++++++----
+ 1 file changed, 36 insertions(+), 9 deletions(-)
+
+diff --git a/lib/metadata/DurationMetadataProvider.class.php b/lib/metadata/DurationMetadataProvider.class.php
+index 35c3bf4..5ca33f7 100644
+--- a/lib/metadata/DurationMetadataProvider.class.php
++++ b/lib/metadata/DurationMetadataProvider.class.php
+@@ -10,10 +10,14 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++    if ($this->isAvailable($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
++    }
++
+     if (!$this->provides($key)) {return FALSE;}
+ 
+     if ($key == 'durations') {
+-      if (!isset($target->metadata['metadatas'][__CLASS__]['durations'])) {
++      if ($target instanceof LineString) {
+         $points = $target->getPoints();
+         $count = count($points);
+         for($i=0; $i<$count-1; $i++) {
+@@ -23,30 +27,41 @@ public function get($target, $key, $options) {
+           $durations[] = abs(strtotime($current->getMetadata('time')) - strtotime($next->getMetadata('time')));
+         }
+         $this->set($target, 'durations', $durations);
+-        return $durations;
+-      } else {
+-        return $target->metadata['metadatas'][__CLASS__]['durations'];
++      }
++      if ($target instanceof MultiLineString) {
++        $durations = array();
++        foreach ($target->components as $component) {
++          $durations = array_merge($durations, $this->get($component, 'durations', $options));
++        }
++        $this->set($target, 'durations', $durations);
+       }
+     }
+ 
+     if ($key == 'stopDurations') {
+-      if (!isset($target->metadata['metadatas'][__CLASS__]['stopDurations'])) {
++      if ($target instanceof LineString) {
+         $points = $target->getPoints();
+         $count = count($points);
++        $durations = array();
+         for($i=0; $i<$count-1; $i++) {
+           $current = $points[$i];
+           $next = $points[$i+1];
+           if (!($next instanceof Point)) {return 0;}
+           $linestring = new LineString(array($current, $next));
+           $duration = abs(strtotime($current->getMetadata('time')) - strtotime($next->getMetadata('time')));
+-          if ($linestring->greatCircleLength() < $options['threshold']) {
++          $length = $linestring->greatCircleLength();
++          if ($length < $options['threshold']) {
+             $durations[] = $duration;
+           }
++
++        }
++        $this->set($target, 'stopDurations', $durations);
++      }
++      if ($target instanceof MultiLineString) {
++        $durations = array();
++        foreach ($target->components as $component) {
++          $durations = array_merge($durations, $this->get($component, 'stopDurations', $options));
+         }
+         $this->set($target, 'stopDurations', $durations);
+-        return $durations;
+-      } else {
+-        return $target->metadata['metadatas'][__CLASS__]['stopDurations'];
+       }
+     }
+ 
+@@ -76,6 +91,18 @@ public function set($target, $key, $value) {
+     return FALSE;
+   }
+ 
++  public function isAvailable($target, $keys) {
++    if (!is_array($keys)) {
++      $keys = (array) $keys;
++    }
++    foreach ($keys as $key) {
++      if (!isset($target->metadata['metadatas'][__CLASS__][$key])) {
++        return FALSE;
++      }
++    }
++    return TRUE;
++  }
++
+   public function id() {
+     return __CLASS__;
+   }
+
+From 1459be42609a18b33944eaea701354018456d514 Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 30 Jul 2012 23:38:39 +0200
+Subject: [PATCH 32/33] Remove DouglasPeucker stuff.
+
+---
+ lib/geometry/MultiLineString.class.php        |   8 ++
+ .../ElevationMetadataProvider.class.php       | 104 ++++++++++++++++--
+ lib/metadata/MetadataProvider.class.php       |   1 +
+ lib/metadata/SpeedMetadataProvider.class.php  |  34 ++++--
+ lib/metadata/TimeMetadataProvider.class.php   |  23 +++-
+ 5 files changed, 147 insertions(+), 23 deletions(-)
+
+diff --git a/lib/geometry/MultiLineString.class.php b/lib/geometry/MultiLineString.class.php
+index 315978d..1622419 100644
+--- a/lib/geometry/MultiLineString.class.php
++++ b/lib/geometry/MultiLineString.class.php
+@@ -29,5 +29,13 @@ public function getMetadata($key, $options = array()) {
+       return NULL;
+     }
+   }
++
++  public function startPoint() {
++    return $this->components[0]->components[0];
++  }
++
++  public function endPoint() {
++    return end(end($this->components)->components);
++  }
+ }
+ 
+diff --git a/lib/metadata/ElevationMetadataProvider.class.php b/lib/metadata/ElevationMetadataProvider.class.php
+index b1bb724..c685db9 100644
+--- a/lib/metadata/ElevationMetadataProvider.class.php
++++ b/lib/metadata/ElevationMetadataProvider.class.php
+@@ -2,7 +2,7 @@
+ 
+ class ElevationMetadataProvider implements MetadataProvider {
+ 
+-  public $capabilities = array('ele', 'maxEle', 'minEle', 'averageEle', 'elevations');
++  public $capabilities = array('ele', 'maxEle', 'minEle', 'averageEle', 'elevations', 'gainTotalEle', 'gainTotalLoss');
+ 
+   public function provides($key) {
+     if (in_array($key, $this->capabilities)) {return TRUE;};
+@@ -10,21 +10,20 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++    if ($this->isAvailable($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
++    }
+ 
+     if (!$this->provides($key)) {return FALSE;}
+ 
+     if ($key == 'elevations') {
+-      if (!isset($target->metadata['metadatas'][__CLASS__]['elevations'])) {
+-        $points = $target->getPoints();
+-        foreach($points as $point) {
+-          $elevations[] = $point->getMetadata('ele');
+-        }
+-        $elevations = array_filter($elevations);
+-        $this->set($target, 'elevations', $elevations);
+-        return $elevations;
+-      } else {
+-        return $target->metadata['metadatas'][__CLASS__]['elevations'];
++      $points = $target->getPoints();
++      foreach($points as $point) {
++        $elevations[] = $point->getMetadata('ele');
+       }
++      $elevations = array_filter($elevations);
++      $this->set($target, 'elevations', $elevations);
++      return $elevations;
+     }
+ 
+     if ($key == 'averageEle') {
+@@ -50,6 +49,77 @@ public function get($target, $key, $options) {
+       return current($elevations);
+     }
+ 
++    if ($key == 'gainTotalEle') {
++      $elevations = $target->getMetadata('elevations');
++      $start = $target->startPoint()->getMetadata('ele');
++      $count = count($elevations)-1;
++      $gain = 0;
++      for ($i=0; $i<$count; $i++) {
++        $current = $elevations[$i];
++        $next = $elevations[$i+1];
++        $deltas[] = array('eleA' => $current, 'eleB' => $next, 'delta' => $next-$current);
++      }
++
++      $p = $i = 0;
++      foreach ($deltas as $n) {
++        if ($n['delta'] >= 0) {
++          if (!$p) {
++            $p ^= 1;
++            $i++;
++          }
++        } else {
++          if ($p) {
++            $p ^= 1;
++            $i++;
++          }
++        }
++        $result[$i][] = $n;
++      }
++
++      foreach($result as $id => $data) {
++        if ($data[0]['delta'] < 0) {
++          unset($result[$id]);
++          continue;
++        }
++
++        if (count($data) <= 1) {
++          unset($result[$id]);
++          continue;
++        }
++
++        if (abs($data[count($data)-1]['eleB'] - $data[0]['eleA']) <= 0.5) {
++          unset($result[$id]);
++          continue;
++        }
++      }
++
++      $gain = 0;
++      foreach($result as $data) {
++        foreach($data as $point) {
++          $gain += $point['delta'];
++        }
++      }
++
++      $this->set($target, 'gainTotalEle', $gain);
++    }
++
++    if ($key == 'gainTotalLoss') {
++      $elevations = $target->getMetadata('elevations');
++      $start = $target->startPoint()->getMetadata('ele');
++      $count = count($elevations);
++      $gain = 0;
++      for ($i=0; $i<$count; $i++) {
++        $current = $elevations[$i];
++        $next = $elevations[$i+1];
++
++        $delta = $current - $next;
++        if (($delta > 0) && $delta > 2) {
++          $gain += $delta;
++        }
++      }
++      $this->set($target, 'gainTotalLoss', $gain);
++    }
++
+     return $target->metadata['metadatas'][__CLASS__][$key];
+   }
+ 
+@@ -61,6 +131,18 @@ public function set($target, $key, $value) {
+     return FALSE;
+   }
+ 
++  public function isAvailable($target, $keys) {
++    if (!is_array($keys)) {
++      $keys = (array) $keys;
++    }
++    foreach ($keys as $key) {
++      if (!isset($target->metadata['metadatas'][__CLASS__][$key])) {
++        return FALSE;
++      }
++    }
++    return TRUE;
++  }
++
+   public function id() {
+     return __CLASS__;
+   }
+diff --git a/lib/metadata/MetadataProvider.class.php b/lib/metadata/MetadataProvider.class.php
+index 46eedf4..18c311b 100644
+--- a/lib/metadata/MetadataProvider.class.php
++++ b/lib/metadata/MetadataProvider.class.php
+@@ -3,6 +3,7 @@
+ interface MetadataProvider
+ {
+     public function provides($key);
++    public function isAvailable($target, $key);
+     public function set($target, $key, $value);
+     public function get($target, $key, $options);
+     public function id();
+diff --git a/lib/metadata/SpeedMetadataProvider.class.php b/lib/metadata/SpeedMetadataProvider.class.php
+index 88b64c2..a1ab1f1 100644
+--- a/lib/metadata/SpeedMetadataProvider.class.php
++++ b/lib/metadata/SpeedMetadataProvider.class.php
+@@ -10,20 +10,24 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
++    if ($this->isAvailable($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
++    }
++
+     if (!$this->provides($key)) {return FALSE;}
+ 
+     if ($key == 'speeds') {
+-      if (!isset($target->metadata['metadatas'][__CLASS__]['speeds'])) {
++      if ($target instanceof LineString) {
+         $points = $target->getPoints();
+-        $count = count($points);
+-        for($i=0; $i<$count-1; $i++) {
++        $count = count($points) - 1;
++        $speeds = array();
++        for($i=0; $i<$count; $i++) {
+           $current = $points[$i];
+           $next = $points[$i+1];
+ 
+           if (!($next instanceof Point)) {return 0;}
+ 
+           $linestring = new LineString(array($current, $next));
+-          $linestring->registerMetadataProvider(new SpeedMetadataProvider());
+           $linestring->registerMetadataProvider(new DurationMetadataProvider());
+ 
+           $duration = $linestring->getMetadata('duration', $options);
+@@ -33,9 +37,13 @@ public function get($target, $key, $options) {
+           }
+         }
+         $this->set($target, 'speeds', $speeds);
+-        return $speeds;
+-      } else {
+-        return $target->metadata['metadatas'][__CLASS__]['speeds'];
++      }
++      if ($target instanceof MultiLineString) {
++        $speeds = array();
++        foreach ($target->components as $component) {
++          $speeds = array_merge($speeds, $this->get($component, 'speeds', $options));
++        }
++        $this->set($target, 'speeds', $speeds);
+       }
+     }
+ 
+@@ -73,6 +81,18 @@ public function set($target, $key, $value) {
+     return FALSE;
+   }
+ 
++  public function isAvailable($target, $keys) {
++    if (!is_array($keys)) {
++      $keys = (array) $keys;
++    }
++    foreach ($keys as $key) {
++      if (!isset($target->metadata['metadatas'][__CLASS__][$key])) {
++        return FALSE;
++      }
++    }
++    return TRUE;
++  }
++
+   public function id() {
+     return __CLASS__;
+   }
+diff --git a/lib/metadata/TimeMetadataProvider.class.php b/lib/metadata/TimeMetadataProvider.class.php
+index cb7b69b..609b05e 100644
+--- a/lib/metadata/TimeMetadataProvider.class.php
++++ b/lib/metadata/TimeMetadataProvider.class.php
+@@ -10,12 +10,13 @@ public function provides($key) {
+   }
+ 
+   public function get($target, $key, $options) {
+-    if ($target instanceof Point) {
+-      if ($this->provides($key)) {
+-        return $target->metadata['metadatas'][__CLASS__][$key];
+-      }
+-      return 0;
++    if ($this->isAvailable($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
+     }
++
++    if (!$this->provides($key)) {return FALSE;}
++
++    return $target->metadata['metadatas'][__CLASS__][$key];
+   }
+ 
+   public function set($target, $key, $value) {
+@@ -26,6 +27,18 @@ public function set($target, $key, $value) {
+     return FALSE;
+   }
+ 
++  public function isAvailable($target, $keys) {
++    if (!is_array($keys)) {
++      $keys = (array) $keys;
++    }
++    foreach ($keys as $key) {
++      if (!isset($target->metadata['metadatas'][__CLASS__][$key])) {
++        return FALSE;
++      }
++    }
++    return TRUE;
++  }
++
+   public function id() {
+     return __CLASS__;
+   }
+
+From 5618ce777a3f353a5a9e9bf8aa98bfc23628a38d Mon Sep 17 00:00:00 2001
+From: Pol Dell'Aiera <Pol@47194.no-reply.drupal.org>
+Date: Mon, 20 May 2013 21:40:45 +0200
+Subject: [PATCH 33/33] Adding Douglas Peucker simplify algorithm and some
+ other changes.
+
+---
+ geoPHP.inc                                    |   3 +-
+ lib/adapters/GPX.class.php                    |  10 +-
+ lib/geometry/Point.class.php                  |  14 ++
+ .../SimplifyMetadataProvider.class.php        | 173 ++++++++++++++++++
+ 4 files changed, 193 insertions(+), 7 deletions(-)
+ create mode 100644 lib/metadata/SimplifyMetadataProvider.class.php
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index 994335d..728a72a 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -13,6 +13,7 @@ include_once("lib/metadata/TimeMetadataProvider.class.php");
+ include_once("lib/metadata/ElevationMetadataProvider.class.php");
+ include_once("lib/metadata/DurationMetadataProvider.class.php");
+ include_once("lib/metadata/SpeedMetadataProvider.class.php");
++include_once("lib/metadata/SimplifyMetadataProvider.class.php");
+ 
+ // Adapters
+ include_once("lib/adapters/GeoAdapter.class.php"); // Abtract class
+@@ -74,7 +75,7 @@ class geoPHP
+     else {
+       $geoms = array();
+       foreach ($data as $item) {
+-        $geoms[] = call_user_func_array(array($processor, "read"), array_merge(array($data), $args));
++        $geoms[] = call_user_func_array(array($processor, "read"), array_merge(array($item), $args));
+       }
+       $result = geoPHP::geometryReduce($geoms);
+     }
+diff --git a/lib/adapters/GPX.class.php b/lib/adapters/GPX.class.php
+index 5c82c69..0a0e6ec 100644
+--- a/lib/adapters/GPX.class.php
++++ b/lib/adapters/GPX.class.php
+@@ -126,13 +126,11 @@ protected function parseTracks() {
+       }
+ 
+       if ($components) {
+-        $duration_provider = new DurationMetadataProvider();
+-        $speed_provider = new SpeedMetadataProvider();
+-
+         $line = new LineString($components);
+-        $line->registerMetadataProvider($duration_provider);
+-        $line->registerMetadataProvider($ele_provider);
+-        $line->registerMetadataProvider($speed_provider);
++        $line->registerMetadataProvider(new DurationMetadataProvider());
++        $line->registerMetadataProvider(new ElevationMetadataProvider());
++        $line->registerMetadataProvider(new SpeedMetadataProvider());
++        $line->registerMetadataProvider(new SimplifyMetadataProvider());
+         $lines[] = $line;
+       }
+     }
+diff --git a/lib/geometry/Point.class.php b/lib/geometry/Point.class.php
+index 8673834..9c45706 100644
+--- a/lib/geometry/Point.class.php
++++ b/lib/geometry/Point.class.php
+@@ -154,5 +154,19 @@ public function numInteriorRings() { return NULL; }
+   public function interiorRingN($n)  { return NULL; }
+   public function pointOnSurface()   { return NULL; }
+   public function explode()          { return NULL; }
++
++  public function dotProduct(Point $v) {
++    return ($this->x() * $v->x() + $this->y() * $v->y());
++  }
++
++  public function magnitude() {
++    return sqrt($this->dotProduct($this));
++  }
++
++  public function unitVector() {
++    if ($this->magnitude()==0) return new Point(0,0);
++    return new Point($this->x()/$this->magnitude(),$this->y()/$this->magnitude());
++  }
++
+ }
+ 
+diff --git a/lib/metadata/SimplifyMetadataProvider.class.php b/lib/metadata/SimplifyMetadataProvider.class.php
+new file mode 100644
+index 0000000..c9c7cdf
+--- /dev/null
++++ b/lib/metadata/SimplifyMetadataProvider.class.php
+@@ -0,0 +1,173 @@
++<?php
++
++class SimplifyMetadataProvider implements MetadataProvider {
++
++  public $capabilities = array('dp', 'radial');
++
++  public function provides($key) {
++    if (in_array($key, $this->capabilities)) {return TRUE;};
++    return FALSE;
++  }
++
++  public function get($target, $key, $options) {
++    if ($this->isAvailable($target, $key)) {
++      return $target->metadata['metadatas'][__CLASS__][$key];
++    }
++
++    if (!$this->provides($key)) {return FALSE;}
++
++    if ($key == 'radial') {
++      if ($target instanceof MultiLineString) {
++        foreach ($target->components as $line) {
++          $newline = $this->get($line, 'radial', $options);
++          // TODO: remove this test and include it in Douglas Peucker algo.
++          if ($newline->numPoints() >= 2) {
++            $result[] = $newline;
++          }
++        }
++        return new MultiLineString($result);
++      }
++      if ($target instanceof LineString) {
++        $tolerance_squared = pow($options['tolerance'], 2);
++        $new = $this->radial($target, array('tolerance'=>$tolerance_squared));
++        $new->metadata['providers'] = $target->metadata['providers'];
++
++        return $new;
++      }
++    }
++
++    if ($key == 'dp') {
++      if ($target instanceof MultiLineString) {
++        foreach ($target->components as $line) {
++          $newline = $this->get($line, 'dp', $options);
++          // TODO: remove this test and include it in Douglas Peucker algo.
++          if ($newline->numPoints() >= 2) {
++            $result[] = $newline;
++          }
++        }
++        return new MultiLineString($result);
++      }
++      if ($target instanceof LineString) {
++        $tolerance_squared = pow($options['tolerance'], 2);
++        $this->douglasPeucker($target, 0,count($target->components)-1, $tolerance_squared);
++        $out = array();
++        foreach ($target->components as $id => $point) {
++          if (isset($point->include)) {
++            $out[] = $target->components[$id];
++          }
++        }
++        $linestring = new LineString($out);
++        $linestring->metadata['providers'] = $target->metadata['providers'];
++
++        return $linestring;
++      }
++    }
++    return $target->metadata['metadatas'][__CLASS__][$key];
++  }
++
++  public function set($target, $key, $value) {
++    if ($this->provides($key)) {
++      $target->metadata['metadatas'][__CLASS__][$key] = $value;
++      return TRUE;
++    }
++    return FALSE;
++  }
++
++  public function isAvailable($target, $keys) {
++    if (!is_array($keys)) {
++      $keys = (array) $keys;
++    }
++    foreach ($keys as $key) {
++      if (!isset($target->metadata['metadatas'][__CLASS__][$key])) {
++        return FALSE;
++      }
++    }
++    return TRUE;
++  }
++
++  public function id() {
++    return __CLASS__;
++  }
++
++  public function radial($line, $options) {
++    $count = $line->numPoints()-1;
++    $out = array();
++    $out[] = $line->components[0];
++    for($i=0; $i<$count; $i++) {
++      $current = $line->components[$i];
++      $next = $line->components[$i+1];
++
++      if ($next instanceof Point && $current instanceof Point) {
++        $newline = new LineString(array($current, $next));
++        if (pow($newline->length(), 2) >= $options['tolerance']) {
++          $out[] = $next;
++        }
++      }
++    }
++
++    $out[] = end($line->components);
++    return new LineString($out);
++  }
++
++  /**
++   * Douglas-Peuker polyline simplification algorithm. First draws single line
++   * from start to end. Then finds largest deviation from this straight line, and if
++   * greater than tolerance, includes that point, splitting the original line into
++   * two new lines. Repeats recursively for each new line created.
++   *
++   * @param int $start_vertex_index
++   * @param int $end_vertex_index
++   */
++  private function douglasPeucker($line, $start_vertex_index, $end_vertex_index, $tolerance_squared) {
++    if ($end_vertex_index <= $start_vertex_index + 1) // there is nothing to simplify
++      return;
++
++    // Make line from start to end
++    $baseline = new LineString(array($line->components[$start_vertex_index],$line->components[$end_vertex_index]));
++
++    // Find largest distance from intermediate points to this line
++    $max_dist_to_line_squared = 0;
++    for ($index = $start_vertex_index+1; $index < $end_vertex_index; $index++) {
++      $dist_to_line_squared = $this->distanceToPointSquared($baseline, $line->components[$index]);
++      if ($dist_to_line_squared>$max_dist_to_line_squared) {
++        $max_dist_to_line_squared = $dist_to_line_squared;
++        $max_dist_index = $index;
++      }
++    }
++
++    // Check max distance with tolerance
++    // error is worse than the tolerance
++    if ($max_dist_to_line_squared > $tolerance_squared) {
++      //dpm($line->components[$max_dist_index], 'Point '.$max_dist_index);
++      // split the polyline at the farthest vertex from S
++      $line->components[$max_dist_index]->include = true;
++      // recursively simplify the two subpolylines
++      $this->douglasPeucker($line, $start_vertex_index,$max_dist_index, $tolerance_squared);
++      $this->douglasPeucker($line, $max_dist_index,$end_vertex_index, $tolerance_squared);
++    }
++    // else the approximation is OK, so ignore intermediate vertices
++  }
++
++  public function distanceToPointSquared(LineString $line, Point $point) {
++    $startPoint = $line->startPoint(); // p1
++    $endPoint = $line->endPoint(); // p2
++
++    $v = new Point($point->x() - $startPoint->x(), $point->y() - $startPoint->y());
++    $l = new Point($endPoint->x() - $startPoint->x(), $endPoint->y() - $startPoint->y());
++    $dot = $v->dotProduct($l->unitVector());
++
++    if ($dot<=0) {
++      $dl = new LineString(array($startPoint,$point));
++      return pow($dl->length(), 2);
++    }
++    if ( ($dot*$dot) >= pow($line->length() ,2) ) {
++      $dl = new LineString(array($endPoint,$point));
++      return pow($dl->length(), 2);
++    }
++    else // Point within line
++    {
++      $v2 = new LineString(array($startPoint,$point));
++      return pow($v2->length(), 2) - pow($dot, 2);
++    }
++  }
++}

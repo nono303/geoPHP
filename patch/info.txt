@@ -1,0 +1,40 @@
+Order
+git apply --verbose "../geoPHP.patch/158 Fix conversion to KML when LineString should be a LinearRing.patch"
+git apply --verbose "../geoPHP.patch/141 Add attribute support for KML.patch"
+git apply --verbose "../geoPHP.patch/129 Added an Esri JSON Adapter..patch"
+git apply --verbose "../geoPHP.patch/127 Improve getPoints() + explode() performance for large geometries.patch"
+git apply --verbose "../geoPHP.patch/115 Use BCMath (where available) for all float arithmetic.patch"
+git apply --verbose "../geoPHP.patch/111 Update GoogleGeocode.class.php.patch"
+git apply --verbose "../geoPHP.patch/177 Fix typo in API documentation .patch"
+git apply --verbose "../geoPHP.patch/133 Ensure associative arrays are properly normalised.patch"
+git apply --verbose "../geoPHP.patch/119 EWKB and WKB output fixes.patch"
+git apply --verbose "../geoPHP.patch/118 Fix cwe367.patch"
+
+
+
+---------
+
+
+git apply --verbose "../geoPHP.patch/ko/41 Add Metadata support.patch"
+git apply --verbose "../geoPHP.patch/ko/47 Simplify LineString using Douglas-Peucker algorithm.patch"
+git apply --verbose "../geoPHP.patch/ko/53 Better all-round 3D support.patch"
+git apply --verbose "../geoPHP.patch/ko/74 Optionally recursive geometry-getComponents.patch"
+git apply --check --verbose "./patch/ko/84 Adds support to metadata on waypoints from a GPX file..patch"
+
+OK
+158
+141
+129
+127
+115
+111
+177
+133
+119
+118
+
+KO
+74
+84
+53
+47

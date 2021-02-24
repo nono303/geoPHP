@@ -1,0 +1,89 @@
+From 0336dc38a0a0ae843f7ec47617200f8ada6a96cb Mon Sep 17 00:00:00 2001
+From: Nick Stallman <nick@agentpoint.com>
+Date: Tue, 21 Mar 2017 16:04:49 +1100
+Subject: [PATCH] Add attribute support for KML
+
+Does not support other formats nor does it support writing the attributes
+---
+ geoPHP.inc                      |  4 +++-
+ lib/adapters/KML.class.php      | 11 ++++++++++-
+ lib/geometry/Geometry.class.php |  6 ++++++
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/geoPHP.inc b/geoPHP.inc
+index 7866304..17f67c9 100644
+--- a/geoPHP.inc
++++ b/geoPHP.inc
+@@ -166,6 +166,7 @@ class geoPHP
+       if (in_array(get_class($geometry),$passbacks)) {
+         $components = $geometry->getComponents();
+         if (count($components) == 1) {
++          $components[0]->mergeAttributes($geometry->attributes);
+           return $components[0];
+         }
+         else {
+@@ -183,11 +184,12 @@ class geoPHP
+     $geom_types = array();
+ 
+     $collections = array('MultiPoint','MultiLineString','MultiPolygon','GeometryCollection');
+-
+     foreach ($geometry as $item) {
+       if ($item) {
+         if (in_array(get_class($item), $collections)) {
+           foreach ($item->getComponents() as $component) {
++            if ($item->numGeometries() == 1)
++		$component->mergeAttributes($item);
+             $geometries[] = $component;
+             $geom_types[] = $component->geometryType();
+           }
+diff --git a/lib/adapters/KML.class.php b/lib/adapters/KML.class.php
+index 8be9f68..fad1a49 100644
+--- a/lib/adapters/KML.class.php
++++ b/lib/adapters/KML.class.php
+@@ -79,14 +79,23 @@ protected function geomFromXML() {
+     $placemark_elements = $this->xmlobj->getElementsByTagName('placemark');
+     if ($placemark_elements->length) {
+       foreach ($placemark_elements as $placemark) {
++        $geometry = false;
++        $attributes = array();
+         foreach ($placemark->childNodes as $child) {
+           // Node names are all the same, except for MultiGeometry, which maps to GeometryCollection
+           $node_name = $child->nodeName == 'multigeometry' ? 'geometrycollection' : $child->nodeName;
+           if (array_key_exists($node_name, $geom_types)) {
+             $function = 'parse'.$geom_types[$node_name];
+-            $geometries[] = $this->$function($child);
++            $geometry = $this->$function($child);
++          } elseif ($child->nodeType == 1 && $child->childNodes->length == 1) {
++            $attributes[$child->nodeName] = $child->nodeValue;
+           }
+         }
++        if ($geometry !== false)
++        {
++          $geometry->attributes = $attributes;
++          $geometries[] = $geometry;
++        }
+       }
+     }
+     else {
+diff --git a/lib/geometry/Geometry.class.php b/lib/geometry/Geometry.class.php
+index 2da2cd7..9304b04 100644
+--- a/lib/geometry/Geometry.class.php
++++ b/lib/geometry/Geometry.class.php
+@@ -8,6 +8,8 @@ abstract class Geometry
+   private   $geos = NULL;
+   protected $srid = NULL;
+   protected $geom_type;
++  
++  public $attributes = array();
+ 
+   // Abtract: Standard
+   // -----------------
+@@ -344,4 +346,8 @@ public function m() {
+     return NULL;
+   }
+ 
++  public function mergeAttributes($mergeWith)
++  {
++    $this->attributes = array_merge($mergeWith->attributes, $this->attributes);
++  }
+ }

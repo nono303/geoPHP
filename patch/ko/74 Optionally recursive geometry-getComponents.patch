@@ -1,0 +1,127 @@
+From cc5f77b6adb6a7c78781af1776a02427f0a88e90 Mon Sep 17 00:00:00 2001
+From: Greg Sebastian <g.s.seabass@gmail.com>
+Date: Mon, 20 May 2013 16:23:23 -0700
+Subject: [PATCH 1/2] Altered $geometry->getComponents to have the option of
+ recursively breaking down a geometry to speficied types.
+
+---
+ lib/geometry/Collection.class.php | 34 +++++++++++++++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index a97666c..68661b8 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -34,10 +34,40 @@ public function __construct($components = array()) {
+   /**
+    * Returns Collection component geometries
+    *
++   * If no parameters are provided it simply returns the array of components stored in this collection
++   * instance.  If the types parameter is provided and contains a list of valid geometries as listed in
++   * geoPHP::geometryTypes() then the list of components will be further broken down to match the types
++   * provided.  For example, if $geometry->getComponents('Point') is called, then the collection
++   * will be recursively broken down until all geometries have been broken down into points.  A common
++   * use case may be to call $geometry->getComponents(array('Point', 'LineString', 'Polygon')) to break
++   * a collection down to the three basic geometry types.
++   *
++   * @param types an array of strings matching valid features types as listed in geoPHP::geometryTypes()
+    * @return array
+    */
+-  public function getComponents() {
+-    return $this->components;
++  public function getComponents($types = array()) {
++    // If no parameters are provided behave as always and return the collections stored in this instance.
++    if (!$types) {
++      return $this->components;
++    }
++
++    // If a string is provided as a parameter place it into an array before continuing.
++    if (is_string($types)) {
++      $types = array($types);
++    }
++    // If the provided parameter is neither a strong nor an array do nothing.
++    if (is_array($types)) {
++      $components = array();
++      foreach ($this->components as $component) {
++	if (in_array($component->geometryType(), $types)) {
++	  $components[] = $component;
++	} else {
++	  $components = array_merge($components, $component->getComponents($types));
++	}
++      }
++
++      return $components;
++    }
+   }
+ 
+   public function centroid() {
+
+From 2bb54f86443bf58ce8939f0df7ac3e52a0d0cd63 Mon Sep 17 00:00:00 2001
+From: Greg Sebastian <greg@geomemes.com>
+Date: Tue, 21 May 2013 11:40:38 -0700
+Subject: [PATCH 2/2] Addressed some issues with recursive getComponents
+ behavior. - Split recursive functionality into a private method. - Changed
+ structure of recusive calls to avoid calling getComponents on points.
+
+---
+ lib/geometry/Collection.class.php | 36 ++++++++++++++++++++++---------
+ 1 file changed, 26 insertions(+), 10 deletions(-)
+
+diff --git a/lib/geometry/Collection.class.php b/lib/geometry/Collection.class.php
+index 68661b8..a9e1e99 100644
+--- a/lib/geometry/Collection.class.php
++++ b/lib/geometry/Collection.class.php
+@@ -46,7 +46,7 @@ public function __construct($components = array()) {
+    * @return array
+    */
+   public function getComponents($types = array()) {
+-    // If no parameters are provided behave as always and return the collections stored in this instance.
++    // If no parameters are provided behave as always and return the components stored in this instance.
+     if (!$types) {
+       return $this->components;
+     }
+@@ -55,19 +55,35 @@ public function getComponents($types = array()) {
+     if (is_string($types)) {
+       $types = array($types);
+     }
+-    // If the provided parameter is neither a strong nor an array do nothing.
++
++    // If the provided parameter is neither a string nor an array do nothing.
+     if (is_array($types)) {
+-      $components = array();
+-      foreach ($this->components as $component) {
+-	if (in_array($component->geometryType(), $types)) {
+-	  $components[] = $component;
+-	} else {
+-	  $components = array_merge($components, $component->getComponents($types));
+-	}
++      // Make sure that the types array contains at least the Point geometry type.
++      if (!in_array('Point', $types)) {
++	$types[] = 'Point';
+       }
++      return $this->getComponentsRecursive($types);
++    }
++  }
+ 
+-      return $components;
++  private function getComponentsRecursive($types = array('Point')) {
++    // If the current geometry is of a type in the types array we can return it.
++    if (in_array($this->geometryType(), $types)) {
++      return array($this);
+     }
++
++    $components = array();
++    foreach ($this->components as $component) {
++      // Simply add geometries that match the given types to the return array to avoid calling
++      // nonexistent getComponentsRecursive method on Point geometries.
++      if (in_array($component->geometryType(), $types)) {
++	$components[] = $component;
++      } else {
++	$components = array_merge($components, $component->getComponentsRecursive($types));
++      }
++    }
++
++    return $components;
+   }
+ 
+   public function centroid() {
