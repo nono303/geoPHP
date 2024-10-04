@@ -139,7 +139,7 @@ class geoPHP
      *
      * @return Geometry
      */
-    public static function load($data, string $format = null, ...$args): Geometry
+    public static function load($data, ?string $format = null, ...$args): Geometry
     {
         if (is_array($data)) {
             // Data is an array, combine all passed in items into a single geometry.
@@ -185,7 +185,7 @@ class geoPHP
      *
      * @deprecated 2.1 Use instead isGeosInstalled(), enableGeos() or disableGeos().
      */
-    public static function geosInstalled(bool $force = null): bool
+    public static function geosInstalled(?bool $force = null): bool
     {
         geoPHP::$geosInstalled = null;
         if ($force !== null) {

@@ -424,7 +424,7 @@ abstract class Geometry
      *
      * @return mixed|null The data or null if not exists.
      */
-    public function getData(string $property = null)
+    public function getData(?string $property = null)
     {
         if ($property) {
             return $this->hasDataProperty($property) ? $this->data[$property] : null;
@@ -749,7 +749,7 @@ abstract class Geometry
      * @throws UnsupportedMethodException
      * @codeCoverageIgnore
      */
-    public function relate(Geometry $geometry, string $pattern = null)
+    public function relate(Geometry $geometry, ?string $pattern = null)
     {
         if ($this->getGeos()) {
             if ($pattern) {

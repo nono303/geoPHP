@@ -302,7 +302,7 @@ class KML implements GeoAdapter
      * @param string|null $type
      * @return string
      */
-    private function linestringToKML(LineString $geometry, string $type = null): string
+    private function linestringToKML(LineString $geometry, ?string $type = null): string
     {
         if (!$type) {
             $type = $geometry->geometryType();

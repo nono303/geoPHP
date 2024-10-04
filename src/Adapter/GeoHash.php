@@ -118,7 +118,7 @@ class GeoHash implements GeoAdapter
      *
      * @return string the GeoHash or null when the $geometry is not a Point
      */
-    public function write(Geometry $geometry, float $precision = null): string
+    public function write(Geometry $geometry, ?float $precision = null): string
     {
         if ($geometry->isEmpty()) {
             return '';

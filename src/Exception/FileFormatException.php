@@ -17,7 +17,7 @@ class FileFormatException extends IOException
      */
     public function __construct(
         ?string $message = null,
-        string $invalidData = null,
+        ?string $invalidData = null,
         int $code = 0,
         ?Throwable $previous = null
     ) {

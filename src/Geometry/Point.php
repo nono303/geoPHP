@@ -436,7 +436,7 @@ class Point extends Geometry
         return 0.0;
     }
 
-    public function greatCircleLength(float $radius = null): float
+    public function greatCircleLength(?float $radius = null): float
     {
         return 0.0;
     }
@@ -471,7 +471,7 @@ class Point extends Geometry
         return null;
     }
 
-    public function geometryN(int $n = null): ?Geometry
+    public function geometryN(?int $n = null): ?Geometry
     {
         return null;
     }
@@ -496,7 +496,7 @@ class Point extends Geometry
         return null;
     }
 
-    public function pointN(int $n = null): ?Point
+    public function pointN(?int $n = null): ?Point
     {
         return null;
     }
@@ -511,7 +511,7 @@ class Point extends Geometry
         return null;
     }
 
-    public function interiorRingN(int $n = null): ?LineString
+    public function interiorRingN(?int $n = null): ?LineString
     {
         return null;
     }

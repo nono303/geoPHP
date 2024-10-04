@@ -52,7 +52,7 @@ class GoogleGeocode implements GeoAdapter
      */
     public function read(
         string $address,
-        string $apiKey = null,
+        ?string $apiKey = null,
         string $returnType = 'point',
         $bounds = null,
         bool $returnMultiple = false
