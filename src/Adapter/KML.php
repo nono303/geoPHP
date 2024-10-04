@@ -344,7 +344,7 @@ class KML implements GeoAdapter
                 . '</' . $this->nss . 'outerBoundaryIs>';
             foreach (array_slice($components, 1) as $comp) {
                 $str .= '<' . $this->nss . 'innerBoundaryIs>'
-                    . $this->linestringToKML($comp)
+                    . $this->linestringToKML($comp, 'LinearRing')
                     . '</' . $this->nss . 'innerBoundaryIs>';
             }
         }
